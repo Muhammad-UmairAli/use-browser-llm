@@ -1,15 +1,29 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createEngineClient, type EngineClient } from "./engine-client.js";
+import { detectWebGPUSupport } from "./detect-webgpu.js";
 import { toAsyncGenerator } from "./to-async-generator.js";
-import { HookBusyError, HookNotReadyError } from "./errors.js";
+import {
+  HookBusyError,
+  HookNotReadyError,
+  UnsupportedError,
+  WorkerCrashError,
+} from "./errors.js";
 import type { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 
-export type ModelLoadStatus = "idle" | "loading" | "ready" | "error";
+export type ModelLoadStatus =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error"
+  | "unsupported";
 
 export interface ModelLoadState {
   status: ModelLoadStatus;
   /** 0-1 while status === "loading"; meaningless otherwise. */
   progress: number;
+  /** Set for both "error" and "unsupported" — check `status` first, this
+   * carries the detail (an UnsupportedError, WorkerCrashError, or
+   * whatever the engine/worker rejected with). */
   error: Error | null;
 }
 
@@ -18,13 +32,21 @@ type Action =
   | { type: "load-start" }
   | { type: "progress"; progress: number }
   | { type: "ready" }
-  | { type: "error"; error: Error };
+  | { type: "error"; error: Error }
+  | { type: "unsupported"; error: UnsupportedError };
 
 const initialState: ModelLoadState = {
   status: "idle",
   progress: 0,
   error: null,
 };
+
+// No progress event and no settlement for this long means the worker has
+// likely been silently killed by the browser (e.g. an out-of-memory kill,
+// which fires no JS error event at all — the RPC promise would otherwise
+// hang forever). This is a heuristic, not a guarantee: a genuinely slow
+// connection could in principle stall this long between progress ticks.
+const LOAD_INACTIVITY_TIMEOUT_MS = 30_000;
 
 function reducer(state: ModelLoadState, action: Action): ModelLoadState {
   switch (action.type) {
@@ -41,6 +63,8 @@ function reducer(state: ModelLoadState, action: Action): ModelLoadState {
       return { ...state, status: "ready", progress: 1, error: null };
     case "error":
       return { ...state, status: "error", error: action.error };
+    case "unsupported":
+      return { status: "unsupported", progress: 0, error: action.error };
   }
 }
 
@@ -90,39 +114,102 @@ export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
     }
 
     let cancelled = false;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribeCrash: (() => void) | null = null;
+
+    const clearWatchdog = () => {
+      if (watchdog !== null) {
+        clearTimeout(watchdog);
+        watchdog = null;
+      }
+    };
+
+    const resetWatchdog = () => {
+      clearWatchdog();
+      watchdog = setTimeout(() => {
+        if (!cancelled) {
+          // Terminate rather than just dispatch: a still-pending
+          // loadModel()/progress callback from this (likely dead) worker
+          // could otherwise resolve or tick *after* this error dispatch,
+          // flapping the status back to "ready" or "loading". Terminating
+          // means any further postMessage from/to it is silently dropped,
+          // so no such late callback can fire.
+          clientRef.current?.terminate();
+          clientRef.current = null;
+          dispatch({
+            type: "error",
+            error: new WorkerCrashError(
+              `no progress for ${LOAD_INACTIVITY_TIMEOUT_MS / 1000}s — the worker may have been killed by the browser (e.g. out of memory)`,
+            ),
+          });
+        }
+      }, LOAD_INACTIVITY_TIMEOUT_MS);
+    };
 
     // Terminate any previous client before starting a new load. MLCEngine
     // has no API to abort an in-flight reload() and overlapping reloads on
     // one engine are unspecified, so a full terminate-and-recreate is the
     // only unambiguously correct way to cancel/replace a stale load.
     clientRef.current?.terminate();
-    const client = createEngineClient();
-    clientRef.current = client;
-    dispatch({ type: "load-start" });
+    clientRef.current = null;
 
-    client
-      .loadModel(modelId, (report) => {
+    void (async () => {
+      // Capability check runs before any model-load attempt, and before
+      // dispatching "loading" — an unsupported browser must short-circuit
+      // straight to "unsupported", never passing through "loading".
+      const support = await detectWebGPUSupport();
+      if (cancelled) {
+        return;
+      }
+      if (!support.supported) {
+        dispatch({
+          type: "unsupported",
+          error: new UnsupportedError(support.reason),
+        });
+        return;
+      }
+
+      const client = createEngineClient();
+      clientRef.current = client;
+      dispatch({ type: "load-start" });
+      resetWatchdog();
+
+      unsubscribeCrash = client.onCrash((error) => {
         if (!cancelled) {
-          dispatch({ type: "progress", progress: report.progress });
-        }
-      })
-      .then(() => {
-        if (!cancelled) {
-          dispatch({ type: "ready" });
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          dispatch({
-            type: "error",
-            error: err instanceof Error ? err : new Error(String(err)),
-          });
+          clearWatchdog();
+          dispatch({ type: "error", error });
         }
       });
 
+      client
+        .loadModel(modelId, (report) => {
+          if (!cancelled) {
+            resetWatchdog();
+            dispatch({ type: "progress", progress: report.progress });
+          }
+        })
+        .then(() => {
+          if (!cancelled) {
+            clearWatchdog();
+            dispatch({ type: "ready" });
+          }
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) {
+            clearWatchdog();
+            dispatch({
+              type: "error",
+              error: err instanceof Error ? err : new Error(String(err)),
+            });
+          }
+        });
+    })();
+
     return () => {
       cancelled = true;
-      client.terminate();
+      clearWatchdog();
+      unsubscribeCrash?.();
+      clientRef.current?.terminate();
       clientRef.current = null;
     };
   }, [modelId]);
