@@ -92,8 +92,8 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 **Total with-AI estimate: 29.19 h** (baseline sum: 78.30 h).
 
 ## Tasks Created
-- [ ] 001.md - Package scaffolding & build tooling (parallel: false)
-- [ ] 002.md - WebGPU capability detection utility (parallel: true)
+- [x] 001.md - Package scaffolding & build tooling (parallel: false) — merged PR #2
+- [x] 002.md - WebGPU capability detection utility (parallel: true) — adds fallback-adapter reason beyond literal AC, logged as scope delta below
 - [ ] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true)
 - [ ] 004.md - Hook state machine for model loading (parallel: false)
 - [ ] 005.md - Hook generate/streamGenerate API + cancellation (parallel: false)
@@ -107,3 +107,9 @@ Total tasks: 10
 Parallel tasks: 5
 Sequential tasks: 5
 Estimated total effort: 29.19 h (with-AI) / 78.30 h (baseline)
+
+## Scope Deltas
+
+Implementation decisions that went beyond a task's literal acceptance criteria, noted here for traceability rather than added to SPLIT-PLAN §6 (backlog):
+
+- **002 (WebGPU capability detection):** added a `"fallback-adapter"` reason (`adapter.info.isFallbackAdapter`) beyond the AC's two literal reasons (`no-navigator-gpu`, `no-adapter`). A software/fallback adapter exists but can't usefully run LLM inference, so it's surfaced as unsupported. Reviewed and accepted as an additive, non-breaking union member. Possible future follow-up (not scheduled): a distinct `requestDevice()`-level feature check (e.g. `shader-f16`) for a stronger capability gate — flagged by review, deferred.
