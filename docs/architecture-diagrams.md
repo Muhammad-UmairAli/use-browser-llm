@@ -39,9 +39,9 @@ lib-specific globals (DOM vs WebWorker).
 ```mermaid
 flowchart LR
     subgraph MainThread["Main thread [built]"]
-        hook["useLocalLLM() hook [planned — P1-04/05]"]
+        hook["useLocalLLM() hook\n(model-load state only — P1-04) [built]"]
         client["engine-client.ts\ncreateEngineClient() [built]"]
-        hook -.-> client
+        hook --> client
     end
 
     subgraph Worker["Dedicated Worker [built]"]
@@ -51,12 +51,10 @@ flowchart LR
     end
 
     client -- "Comlink.wrap<EngineAPI>()\n(postMessage RPC)" --> api
-
-    style hook stroke-dasharray: 5 5
 ```
 
 Notes:
 
 - `EngineAPI` is exposed via `Comlink.expose()` in `worker.ts`, never web-llm's own `WebWorkerMLCEngine`/`Handler` — see `.claude/epics/use-local-llm/epic.md`'s Scope Deltas for why both would have been redundant.
 - Callback arguments (`onProgress`, `onToken`) cross the boundary via `Comlink.proxy()`, not plain function references — Comlink does not auto-proxy functions.
-- The hook node above is dashed/planned — P1-04 (state machine) and P1-05 (generate/streamGenerate) will consume `createEngineClient()` from the main thread; this diagram will flip that node to `[built]` when those merge.
+- `useLocalLLM()` currently covers only model-loading state (idle/loading/ready/error). P1-05 (generate/streamGenerate), P1-06 (cache-status), and P1-07 (unsupported-browser path) extend the same hook — this diagram's `hook` node will grow annotations as each merges, rather than gaining new nodes.
