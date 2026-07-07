@@ -26,6 +26,7 @@ function makeFakeClient(
     streamGenerate: vi.fn(),
     abort: vi.fn().mockResolvedValue(undefined),
     unload: vi.fn().mockResolvedValue(undefined),
+    checkCache: vi.fn().mockResolvedValue(false),
     terminate: vi.fn(),
     onCrash: vi.fn().mockReturnValue(() => {}),
     ...overrides,
@@ -54,6 +55,7 @@ describe("useLocalLLM", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.isGenerating).toBe(false);
     expect(result.current.generationError).toBeNull();
+    expect(result.current.cacheStatus).toBe("idle");
     expect(engineClientModule.createEngineClient).not.toHaveBeenCalled();
   });
 
@@ -513,6 +515,98 @@ describe("useLocalLLM", () => {
       });
 
       expect(result.current.status).toBe("loading");
+    });
+  });
+
+  describe("cacheStatus", () => {
+    it("resolves to 'cached' when checkCache reports the model is already downloaded", async () => {
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+        checkCache: vi.fn().mockResolvedValue(true),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+
+      await waitFor(() => expect(result.current.cacheStatus).toBe("cached"));
+      // Available before status reaches "ready" — this load never resolves.
+      expect(result.current.status).toBe("loading");
+    });
+
+    it("resolves to 'downloading' when checkCache reports a cache miss", async () => {
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+        checkCache: vi.fn().mockResolvedValue(false),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+
+      await waitFor(() =>
+        expect(result.current.cacheStatus).toBe("downloading"),
+      );
+      expect(result.current.status).toBe("loading");
+    });
+
+    it("starts as 'checking' immediately on load-start, before checkCache resolves", async () => {
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+        checkCache: vi.fn(() => new Promise<boolean>(() => {})),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+
+      await waitFor(() => expect(result.current.status).toBe("loading"));
+      expect(result.current.cacheStatus).toBe("checking");
+    });
+
+    it("ignores a late checkCache resolution once the load has already reached ready", async () => {
+      const box: { resolveCheckCache: ((cached: boolean) => void) | null } = {
+        resolveCheckCache: null,
+      };
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn().mockResolvedValue(undefined),
+        checkCache: vi.fn(
+          () =>
+            new Promise<boolean>((resolve) => {
+              box.resolveCheckCache = resolve;
+            }),
+        ),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      expect(result.current.cacheStatus).toBe("checking");
+
+      act(() => {
+        box.resolveCheckCache?.(false);
+      });
+
+      // The reducer drops a cache-status action once status isn't
+      // "loading" anymore — a late "downloading" label after ready would
+      // be misleading, not useful.
+      expect(result.current.cacheStatus).toBe("checking");
+    });
+
+    it("resets to idle on a modelId change back to undefined", async () => {
+      const fakeClient = makeFakeClient({
+        checkCache: vi.fn().mockResolvedValue(true),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result, rerender } = renderHook<
+        ReturnType<typeof useLocalLLM>,
+        { modelId: string | undefined }
+      >(({ modelId }) => useLocalLLM(modelId), {
+        initialProps: { modelId: "test-model" },
+      });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+
+      rerender({ modelId: undefined });
+
+      expect(result.current.cacheStatus).toBe("idle");
     });
   });
 });

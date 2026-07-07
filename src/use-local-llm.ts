@@ -17,6 +17,8 @@ export type ModelLoadStatus =
   | "error"
   | "unsupported";
 
+export type CacheStatus = "idle" | "checking" | "cached" | "downloading";
+
 export interface ModelLoadState {
   status: ModelLoadStatus;
   /** 0-1 while status === "loading"; meaningless otherwise. */
@@ -25,12 +27,23 @@ export interface ModelLoadState {
    * carries the detail (an UnsupportedError, WorkerCrashError, or
    * whatever the engine/worker rejected with). */
   error: Error | null;
+  /** Whether modelId was already in IndexedDB before this load started.
+   * "checking" until the (non-blocking) cache check resolves; settles to
+   * "cached" or "downloading" before status reaches "ready" — but is not
+   * itself a loading gate, so it's still meaningful to read after ready.
+   * Edge case: for a fast/cached model, `status` can reach "ready" before
+   * this check resolves at all — cacheStatus then stays "checking"
+   * indefinitely for that load (the reducer intentionally drops a late
+   * resolution once status is no longer "loading"; see the "cache-status"
+   * case below). */
+  cacheStatus: CacheStatus;
 }
 
 type Action =
   | { type: "reset" }
   | { type: "load-start" }
   | { type: "progress"; progress: number }
+  | { type: "cache-status"; cacheStatus: "cached" | "downloading" }
   | { type: "ready" }
   | { type: "error"; error: Error }
   | { type: "unsupported"; error: UnsupportedError };
@@ -39,6 +52,7 @@ const initialState: ModelLoadState = {
   status: "idle",
   progress: 0,
   error: null,
+  cacheStatus: "idle",
 };
 
 // No progress event and no settlement for this long means the worker has
@@ -56,15 +70,42 @@ function reducer(state: ModelLoadState, action: Action): ModelLoadState {
       // Reset progress/error even on a retry after a previous failure —
       // otherwise a re-request would start from stale progress or carry
       // the old error into the new load.
-      return { status: "loading", progress: 0, error: null };
+      return {
+        status: "loading",
+        progress: 0,
+        error: null,
+        cacheStatus: "checking",
+      };
     case "progress":
       return { ...state, progress: action.progress };
+    case "cache-status":
+      // Ignore a stale check that resolves after the load already
+      // settled — e.g. a small/cached model can reach "ready" before the
+      // (concurrently-fired, non-blocking) cache check resolves. Once
+      // terminal, cacheStatus for the current load is already implied
+      // (ready always means it finished downloading-or-was-cached), so a
+      // late flip to "downloading" here would be misleading, not useful.
+      if (state.status !== "loading") {
+        return state;
+      }
+      return { ...state, cacheStatus: action.cacheStatus };
     case "ready":
       return { ...state, status: "ready", progress: 1, error: null };
     case "error":
+      // Deliberately keeps the current cacheStatus (unlike "unsupported"
+      // below, which resets it to "idle") — an error happens mid-load,
+      // after cacheStatus was already meaningfully "checking"/"cached"/
+      // "downloading" for this attempt, whereas "unsupported" short-
+      // circuits before a load — and therefore a cache check — ever
+      // started.
       return { ...state, status: "error", error: action.error };
     case "unsupported":
-      return { status: "unsupported", progress: 0, error: action.error };
+      return {
+        status: "unsupported",
+        progress: 0,
+        error: action.error,
+        cacheStatus: "idle",
+      };
   }
 }
 
@@ -202,6 +243,26 @@ export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
               error: err instanceof Error ? err : new Error(String(err)),
             });
           }
+        });
+
+      // Fired concurrently with loadModel, not awaited before it — this
+      // is purely informational (for UI), no reason to delay the actual
+      // download to find out whether it was needed. The reducer ignores
+      // this action once status is no longer "loading" (e.g. a small
+      // cached model can reach "ready" before this resolves).
+      client
+        .checkCache(modelId)
+        .then((isCached) => {
+          if (!cancelled) {
+            dispatch({
+              type: "cache-status",
+              cacheStatus: isCached ? "cached" : "downloading",
+            });
+          }
+        })
+        .catch(() => {
+          // Cache-check failure is not itself a load failure — loadModel's
+          // own error handling above is the source of truth for that.
         });
     })();
 

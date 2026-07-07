@@ -39,7 +39,7 @@ lib-specific globals (DOM vs WebWorker).
 ```mermaid
 flowchart LR
     subgraph MainThread["Main thread [built]"]
-        hook["useLocalLLM() hook\n(load state, generate/streamGenerate,\nunsupported+crash+watchdog — P1-04/05/07) [built]"]
+        hook["useLocalLLM() hook\n(load state, generate/streamGenerate,\nunsupported+crash+watchdog, cacheStatus\n— P1-04/05/06/07) [built]"]
         client["engine-client.ts\ncreateEngineClient() [built]"]
         hook --> client
     end
@@ -57,5 +57,5 @@ Notes:
 
 - `EngineAPI` is exposed via `Comlink.expose()` in `worker.ts`, never web-llm's own `WebWorkerMLCEngine`/`Handler` — see `.claude/epics/use-local-llm/epic.md`'s Scope Deltas for why both would have been redundant.
 - Callback arguments (`onProgress`, `onToken`) cross the boundary via `Comlink.proxy()`, not plain function references — Comlink does not auto-proxy functions.
-- `useLocalLLM()` now covers model-loading state (idle/loading/ready/error/unsupported), generate/streamGenerate/abort, WebGPU capability detection (short-circuits to `unsupported` before ever creating a worker), and worker-crash/inactivity-watchdog error handling. P1-06 (cache-status) extends the same hook — this diagram's `hook` node will grow annotations as it merges, rather than gaining a new node.
+- `useLocalLLM()` now covers model-loading state (idle/loading/ready/error/unsupported), generate/streamGenerate/abort, WebGPU capability detection (short-circuits to `unsupported` before ever creating a worker), worker-crash/inactivity-watchdog error handling, and cache-status exposure (`cacheStatus`, via `EngineAPI.checkCache()` → web-llm's own `hasModelInCache()`, only ever called from inside the worker to keep web-llm's runtime out of the main bundle). Remaining Phase 1 work (tests, docs, publish polish) doesn't add hook behavior, just hardens/documents what's here.
 - Crash/watchdog detection (P1-07) is scoped to the loading phase only — a worker crash during `generate()`/`streamGenerate()` is not yet covered; see `epic.md`'s Scope Deltas.

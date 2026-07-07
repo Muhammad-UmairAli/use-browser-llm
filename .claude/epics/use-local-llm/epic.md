@@ -97,7 +97,7 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 - [x] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true) — reconciled MLCEngine+Comlink design, see Scope Deltas
 - [x] 004.md - Hook state machine for model loading (parallel: false) — wired into public index.ts, replacing the P1-01 placeholder
 - [x] 005.md - Hook generate/streamGenerate API + cancellation (parallel: false) — added HookBusyError re-entrancy guard, see Scope Deltas
-- [ ] 006.md - Cache-status exposure (parallel: true)
+- [x] 006.md - Cache-status exposure (parallel: true) — routed through worker to preserve web-llm bundle isolation
 - [x] 007.md - Error handling & unsupported-browser fallback path (parallel: true) — added load-inactivity watchdog beyond literal AC, see Scope Deltas
 - [ ] 008.md - Unit tests (mocked engine) + worker-boundary integration harness (parallel: false)
 - [ ] 009.md - README + usage docs (parallel: true)
