@@ -6,7 +6,7 @@ describe("package scaffolding smoke test", () => {
     expect(USE_LOCAL_LLM_VERSION).toBe("0.1.0");
   });
 
-  it("exports useLocalLLM as a callable placeholder", () => {
-    expect(() => useLocalLLM()).toThrow("not implemented yet");
+  it("exports useLocalLLM as a function", () => {
+    expect(typeof useLocalLLM).toBe("function");
   });
 });

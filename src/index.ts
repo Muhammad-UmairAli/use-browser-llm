@@ -1,10 +1,11 @@
 export const USE_LOCAL_LLM_VERSION = "0.1.0";
 
-/**
- * Placeholder for the public useLocalLLM() hook. Real implementation lands
- * across tasks P1-02 through P1-07; this task only proves the build,
- * typecheck, and test pipeline works end-to-end.
- */
-export function useLocalLLM(): never {
-  throw new Error("useLocalLLM() is not implemented yet.");
-}
+// Public API surface. useLocalLLM() currently covers only model-loading
+// state (P1-04) — generate/streamGenerate (P1-05), cache-status (P1-06),
+// and the unsupported-browser path (P1-07) extend it in later tasks.
+export {
+  useLocalLLM,
+  type ModelLoadState,
+  type ModelLoadStatus,
+  type UseLocalLLMResult,
+} from "./use-local-llm.js";

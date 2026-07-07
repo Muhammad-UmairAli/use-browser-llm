@@ -95,7 +95,7 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 - [x] 001.md - Package scaffolding & build tooling (parallel: false) — merged PR #2
 - [x] 002.md - WebGPU capability detection utility (parallel: true) — adds fallback-adapter reason beyond literal AC, logged as scope delta below
 - [x] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true) — reconciled MLCEngine+Comlink design, see Scope Deltas
-- [ ] 004.md - Hook state machine for model loading (parallel: false)
+- [x] 004.md - Hook state machine for model loading (parallel: false) — wired into public index.ts, replacing the P1-01 placeholder
 - [ ] 005.md - Hook generate/streamGenerate API + cancellation (parallel: false)
 - [ ] 006.md - Cache-status exposure (parallel: true)
 - [ ] 007.md - Error handling & unsupported-browser fallback path (parallel: true)
