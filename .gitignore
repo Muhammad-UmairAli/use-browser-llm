@@ -1,5 +1,6 @@
 node_modules/
 sandboxes/*/node_modules/
+dist/
 
 # OS noise
 .DS_Store

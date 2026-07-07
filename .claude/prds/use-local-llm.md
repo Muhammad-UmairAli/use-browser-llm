@@ -38,7 +38,9 @@ Running an LLM locally in a browser today requires wiring together a WebGPU infe
 
 ## Non-Functional Requirements
 
-- **Confirmed technology stack (Stack A — MLC-first + Comlink RPC):** `@mlc-ai/web-llm` as the underlying WebGPU inference engine; `comlink` for the Web Worker RPC boundary (wraps `web-llm`'s `WebWorkerMLCEngine` pattern); `tsup` (esbuild-based) for a dual ESM/CJS build with a separate worker output chunk; strict TypeScript with generated `.d.ts`; Vitest for unit tests (mocked-engine path for CI without a GPU) plus a browser/Playwright-driven path for real WebGPU smoke tests.
+- **Confirmed technology stack (Stack A — MLC-first + Comlink RPC):** `@mlc-ai/web-llm` as the underlying WebGPU inference engine; `comlink` for the Web Worker RPC boundary (wraps `web-llm`'s `WebWorkerMLCEngine` pattern); `tsup` (esbuild-based) for an **ESM-only** build with a separate worker output chunk; strict TypeScript with generated `.d.ts`; Vitest for unit tests (mocked-engine path for CI without a GPU) plus a browser/Playwright-driven path for real WebGPU smoke tests.
+- **ESM-only, no CJS build** (revised during P1-01 code review): `@mlc-ai/web-llm` ships ESM-first, so a CJS build of this package would `require()` an ESM-only dependency and throw `ERR_REQUIRE_ESM` for CJS consumers on older Node. Browser/WebGPU-targeting packages have no CJS-consumer obligation, so ESM-only removes a whole class of downstream breakage rather than papering over it.
+- **License: MIT.**
 - React 18+ compatibility required, including concurrent rendering — no reliance on legacy lifecycle patterns.
 - Inference must never run on the main thread; violating this is a release blocker, not a bug to backlog.
 - Package must stay dependency-light: `@mlc-ai/web-llm` and `comlink` are the only required runtime dependencies; no UI/styling dependencies of any kind.
