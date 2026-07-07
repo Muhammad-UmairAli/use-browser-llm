@@ -1,0 +1,36 @@
+name: CI
+
+# Runs the same hooks defined in .pre-commit-config.yaml on every PR
+# and on every push that isn't to a protected branch. Catches issues
+# from developers who haven't run `pre-commit install` locally.
+#
+# Failing CI blocks the merge per the branch-protection ruleset
+# (see .github/rulesets/main.json and develop.json once you wire
+# required_status_checks).
+#
+# See docs/methodology/04-code-quality-and-gates.md.
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches-ignore: [main, develop]
+
+# A push to an open PR branch matches both triggers; cancel the older
+# duplicate instead of running the same hooks twice.
+concurrency:
+  # head_ref is set only on pull_request runs; ref_name gives the same bare
+  # branch name on push runs, so the two duplicate runs share one group.
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: Pre-commit hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: pre-commit/action@v3.0.1

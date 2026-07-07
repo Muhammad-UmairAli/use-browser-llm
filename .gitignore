@@ -1,0 +1,40 @@
+node_modules/
+sandboxes/*/node_modules/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Python bytecode (created whenever tools/*.py run)
+__pycache__/
+*.py[cod]
+
+# Kit infrastructure — staged assets used by kit slash commands
+.kit/
+
+# Ephemeral Claude Code runtime state (never commit; see docs/methodology/13-agent-tracking.md)
+.claude/task-timer.json
+.claude/agent-in-flight.json
+
+# Per-machine Claude Code overrides
+.claude/settings.local.json
+
+# Generated exports (tools/export-phase-times.py --csv)
+phase-times*.csv
+
+# Time/estimate/agent tracking — internal audit trail, kept local-only for open source
+.claude/time-log.json
+.claude/time-log.js
+.claude/plan-data.json
+.claude/plan-data.js
+.claude/agents-log.json
+.claude/agents-log.js
+TIME-LOG.md
+AGENT-LOG.md
+DASHBOARD.html
+tools
+Split-Plan.md
+TODO.md
+
+# External CCPM clone — installed per-adopter via the setup wizard, not vendored
+.claude/ccpm/
