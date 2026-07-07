@@ -1,14 +1,21 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLocalLLM } from "../src/use-local-llm.js";
 import type { EngineClient } from "../src/engine-client.js";
+import { UnsupportedError, WorkerCrashError } from "../src/errors.js";
 
 const engineClientModule = vi.hoisted(() => ({
   createEngineClient: vi.fn(),
 }));
 
 vi.mock("../src/engine-client.js", () => engineClientModule);
+
+const detectWebGPUSupportModule = vi.hoisted(() => ({
+  detectWebGPUSupport: vi.fn(),
+}));
+
+vi.mock("../src/detect-webgpu.js", () => detectWebGPUSupportModule);
 
 function makeFakeClient(
   overrides: Partial<EngineClient> = {},
@@ -20,9 +27,18 @@ function makeFakeClient(
     abort: vi.fn().mockResolvedValue(undefined),
     unload: vi.fn().mockResolvedValue(undefined),
     terminate: vi.fn(),
+    onCrash: vi.fn().mockReturnValue(() => {}),
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  // Default every test to a supported browser; the dedicated "unsupported"
+  // describe block below overrides this per-test.
+  detectWebGPUSupportModule.detectWebGPUSupport.mockResolvedValue({
+    supported: true,
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -58,7 +74,7 @@ describe("useLocalLLM", () => {
 
     const { result } = renderHook(() => useLocalLLM("test-model"));
 
-    expect(result.current.status).toBe("loading");
+    await waitFor(() => expect(result.current.status).toBe("loading"));
     expect(result.current.progress).toBe(0);
 
     act(() => {
@@ -109,7 +125,7 @@ describe("useLocalLLM", () => {
     await waitFor(() => expect(result.current.status).toBe("error"));
 
     rerender({ modelId: "model-b" });
-    expect(result.current.status).toBe("loading");
+    await waitFor(() => expect(result.current.status).toBe("loading"));
     expect(result.current.progress).toBe(0);
     expect(result.current.error).toBeNull();
 
@@ -131,7 +147,11 @@ describe("useLocalLLM", () => {
     });
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-    const { unmount } = renderHook(() => useLocalLLM("test-model"));
+    const { result, unmount } = renderHook(() => useLocalLLM("test-model"));
+    // Wait for the client to actually exist (past the async capability
+    // check) before unmounting — otherwise there's nothing to terminate
+    // yet, and this test would pass trivially for the wrong reason.
+    await waitFor(() => expect(result.current.status).toBe("loading"));
     unmount();
 
     // The real regression guard: cleanup ran (worker terminated) — this
@@ -156,7 +176,7 @@ describe("useLocalLLM", () => {
     });
   });
 
-  it("terminates the previous client and starts a fresh one when modelId changes mid-load", () => {
+  it("terminates the previous client and starts a fresh one when modelId changes mid-load", async () => {
     const firstClient = makeFakeClient({
       // A promise that never resolves during this test — proves the
       // replacement happens while model-a's load is still genuinely
@@ -172,14 +192,19 @@ describe("useLocalLLM", () => {
       ({ modelId }) => useLocalLLM(modelId),
       { initialProps: { modelId: "model-a" } },
     );
-    expect(result.current.status).toBe("loading");
+    await waitFor(() => expect(result.current.status).toBe("loading"));
 
     rerender({ modelId: "model-b" });
 
+    // Synchronous: the effect terminates the previous client in its body,
+    // before the async capability check for the new modelId even starts.
     expect(firstClient.terminate).toHaveBeenCalledOnce();
-    expect(secondClient.loadModel).toHaveBeenCalledWith(
-      "model-b",
-      expect.any(Function),
+
+    await waitFor(() =>
+      expect(secondClient.loadModel).toHaveBeenCalledWith(
+        "model-b",
+        expect.any(Function),
+      ),
     );
   });
 
@@ -217,7 +242,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
       const { result } = renderHook(() => useLocalLLM("test-model"));
-      expect(result.current.status).toBe("loading");
+      await waitFor(() => expect(result.current.status).toBe("loading"));
 
       await expect(
         result.current.generate([{ role: "user", content: "hi" }]),
@@ -346,6 +371,148 @@ describe("useLocalLLM", () => {
       result.current.abort();
 
       expect(fakeClient.abort).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("unsupported browser", () => {
+    it("short-circuits straight to unsupported, never through loading, and never spawns a worker", async () => {
+      detectWebGPUSupportModule.detectWebGPUSupport.mockResolvedValue({
+        supported: false,
+        reason: "no-navigator-gpu",
+      });
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+
+      await waitFor(() =>
+        expect(result.current.status).toBe("unsupported"),
+      );
+      expect(result.current.error).toBeInstanceOf(UnsupportedError);
+      expect((result.current.error as UnsupportedError).reason).toBe(
+        "no-navigator-gpu",
+      );
+      expect(engineClientModule.createEngineClient).not.toHaveBeenCalled();
+    });
+
+    it("also short-circuits on a modelId change mid-session, not just initial mount", async () => {
+      const readyClient = makeFakeClient();
+      engineClientModule.createEngineClient.mockReturnValue(readyClient);
+
+      const { result, rerender } = renderHook(
+        ({ modelId }) => useLocalLLM(modelId),
+        { initialProps: { modelId: "model-a" } },
+      );
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+
+      detectWebGPUSupportModule.detectWebGPUSupport.mockResolvedValue({
+        supported: false,
+        reason: "no-adapter",
+      });
+      rerender({ modelId: "model-b" });
+
+      await waitFor(() =>
+        expect(result.current.status).toBe("unsupported"),
+      );
+      // Only the first (model-a) call spawned a worker; model-b's
+      // capability check failed before a second one was ever created.
+      expect(engineClientModule.createEngineClient).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("worker crash", () => {
+    it("surfaces a crash via onCrash as a typed error, and a fresh request recovers", async () => {
+      let crashListener: ((error: Error) => void) | null = null;
+      const crashingClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+        onCrash: vi.fn((listener) => {
+          crashListener = listener;
+          return () => {};
+        }),
+      });
+      const recoveredClient = makeFakeClient();
+      engineClientModule.createEngineClient
+        .mockReturnValueOnce(crashingClient)
+        .mockReturnValueOnce(recoveredClient);
+
+      const { result, rerender } = renderHook(
+        ({ modelId }) => useLocalLLM(modelId),
+        { initialProps: { modelId: "model-a" } },
+      );
+      await waitFor(() => expect(result.current.status).toBe("loading"));
+
+      act(() => {
+        crashListener?.(new WorkerCrashError("uncaught exception"));
+      });
+
+      await waitFor(() => expect(result.current.status).toBe("error"));
+      expect(result.current.error).toBeInstanceOf(WorkerCrashError);
+
+      // The hook remains usable — a fresh request (different modelId)
+      // recovers cleanly.
+      rerender({ modelId: "model-b" });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+    });
+  });
+
+  describe("load inactivity watchdog", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("surfaces a typed error if no progress is reported for the timeout window", async () => {
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+
+      // Let the async capability-check microtask resolve under fake timers.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.status).toBe("loading");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBeInstanceOf(WorkerCrashError);
+    });
+
+    it("resets on each progress tick, so steady-but-slow progress never times out", async () => {
+      let progressCallback: ((report: { progress: number }) => void) | null =
+        null;
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn((_modelId: string, onProgress) => {
+          progressCallback = onProgress as typeof progressCallback;
+          return new Promise<void>(() => {});
+        }),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // 20s, then a progress tick, then another 20s — 40s total elapsed,
+      // but never more than 20s without a tick, so no timeout fires.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      act(() => {
+        progressCallback?.({ progress: 0.5 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+
+      expect(result.current.status).toBe("loading");
     });
   });
 });

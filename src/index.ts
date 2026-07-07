@@ -1,8 +1,9 @@
 export const USE_LOCAL_LLM_VERSION = "0.1.0";
 
-// Public API surface. useLocalLLM() currently covers model-loading state
-// (P1-04) and generate/streamGenerate/abort (P1-05) — cache-status (P1-06)
-// and the unsupported-browser path (P1-07) extend it in later tasks.
+// Public API surface. useLocalLLM() now covers model-loading state
+// (P1-04), generate/streamGenerate/abort (P1-05), and the
+// unsupported-browser fallback path (P1-07) — cache-status (P1-06) extends
+// it in a later task.
 export {
   useLocalLLM,
   type GenerationState,
@@ -10,4 +11,9 @@ export {
   type ModelLoadStatus,
   type UseLocalLLMResult,
 } from "./use-local-llm.js";
-export { HookBusyError, HookNotReadyError } from "./errors.js";
+export {
+  HookBusyError,
+  HookNotReadyError,
+  UnsupportedError,
+  WorkerCrashError,
+} from "./errors.js";

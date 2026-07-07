@@ -4,6 +4,7 @@ import type {
   InitProgressReport,
 } from "@mlc-ai/web-llm";
 import type { EngineAPI } from "./engine-api.js";
+import { WorkerCrashError } from "./errors.js";
 
 export interface EngineClient {
   loadModel(
@@ -20,6 +21,16 @@ export interface EngineClient {
   /** Terminates the underlying Worker. Not part of EngineAPI — this is a
    * main-thread-only lifecycle operation, not something to proxy. */
   terminate(): void;
+  /**
+   * Subscribes to uncaught exceptions inside the worker (returns an
+   * unsubscribe function). This only covers crashes that raise a JS
+   * `error`/`messageerror` event — it does NOT cover a silent browser
+   * OOM-kill, where the worker just stops responding with no event at
+   * all. That case has no event to subscribe to; callers needing to
+   * detect it must use an inactivity timeout on their own pending calls
+   * instead (see use-local-llm.ts's load-inactivity watchdog).
+   */
+  onCrash(listener: (error: WorkerCrashError) => void): () => void;
 }
 
 /**
@@ -59,6 +70,20 @@ export function createEngineClient(): EngineClient {
     },
     terminate() {
       worker.terminate();
+    },
+    onCrash(listener) {
+      const handleError = (event: ErrorEvent) => {
+        listener(new WorkerCrashError(event.message || "uncaught exception"));
+      };
+      const handleMessageError = () => {
+        listener(new WorkerCrashError("failed to deserialize a worker message"));
+      };
+      worker.addEventListener("error", handleError);
+      worker.addEventListener("messageerror", handleMessageError);
+      return () => {
+        worker.removeEventListener("error", handleError);
+        worker.removeEventListener("messageerror", handleMessageError);
+      };
     },
   };
 }
