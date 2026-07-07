@@ -1,5 +1,8 @@
-import { useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createEngineClient, type EngineClient } from "./engine-client.js";
+import { toAsyncGenerator } from "./to-async-generator.js";
+import { HookBusyError, HookNotReadyError } from "./errors.js";
+import type { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 
 export type ModelLoadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -41,17 +44,44 @@ function reducer(state: ModelLoadState, action: Action): ModelLoadState {
   }
 }
 
-export type UseLocalLLMResult = ModelLoadState;
+export interface GenerationState {
+  isGenerating: boolean;
+  generationError: Error | null;
+}
+
+export interface UseLocalLLMResult extends ModelLoadState, GenerationState {
+  generate(messages: ChatCompletionMessageParam[]): Promise<string>;
+  streamGenerate(
+    messages: ChatCompletionMessageParam[],
+  ): AsyncGenerator<string, void, void>;
+  /** Stops an in-flight generate()/streamGenerate() call, including the
+   * worker's inference loop — not just the UI-visible promise. */
+  abort(): void;
+}
 
 /**
- * Placeholder for the public useLocalLLM() hook name; this task (P1-04)
- * implements only the model-loading state machine. Generation
- * (P1-05), cache-status (P1-06), and the unsupported-browser path
- * (P1-07) extend this in later tasks.
+ * Model-loading state machine (P1-04) plus generate/streamGenerate/abort
+ * (P1-05). Cache-status (P1-06) and the unsupported-browser path (P1-07)
+ * extend this hook in later tasks.
  */
 export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
   const [state, dispatch] = useReducer(reducer, initialState);
   const clientRef = useRef<EngineClient | null>(null);
+
+  // Mirrors `state.status` into a ref so generate/streamGenerate/abort can
+  // read the current status without needing `state.status` in their
+  // useCallback deps — that would otherwise recreate them (and break
+  // reference equality for consumers) on every status transition.
+  const statusRef = useRef(state.status);
+  statusRef.current = state.status;
+
+  // Synchronous re-entrancy guard: React state updates are batched/async,
+  // so `isGenerating` state alone can't prevent two generate() calls fired
+  // back-to-back (before the first's setState has flushed) from both
+  // passing the check.
+  const isGeneratingRef = useRef(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState<Error | null>(null);
 
   useEffect(() => {
     if (!modelId) {
@@ -65,11 +95,6 @@ export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
     // has no API to abort an in-flight reload() and overlapping reloads on
     // one engine are unspecified, so a full terminate-and-recreate is the
     // only unambiguously correct way to cancel/replace a stale load.
-    // (This is currently a defensive no-op — the effect's own cleanup
-    // always runs first and nulls the ref — but clientRef is exposed here
-    // rather than kept as a local variable because P1-05's generate/
-    // streamGenerate will need to read the current client from outside
-    // this effect.)
     clientRef.current?.terminate();
     const client = createEngineClient();
     clientRef.current = client;
@@ -102,5 +127,101 @@ export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
     };
   }, [modelId]);
 
-  return state;
+  const generate = useCallback(
+    async (messages: ChatCompletionMessageParam[]): Promise<string> => {
+      if (statusRef.current !== "ready" || !clientRef.current) {
+        throw new HookNotReadyError();
+      }
+      if (isGeneratingRef.current) {
+        throw new HookBusyError();
+      }
+
+      isGeneratingRef.current = true;
+      setIsGenerating(true);
+      setGenerationError(null);
+      try {
+        return await clientRef.current.generate(messages);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        setGenerationError(error);
+        throw error;
+      } finally {
+        isGeneratingRef.current = false;
+        setIsGenerating(false);
+      }
+    },
+    [],
+  );
+
+  const streamGenerate = useCallback(
+    (
+      messages: ChatCompletionMessageParam[],
+    ): AsyncGenerator<string, void, void> =>
+      streamGenerateImpl(
+        statusRef,
+        clientRef,
+        isGeneratingRef,
+        setIsGenerating,
+        setGenerationError,
+        messages,
+      ),
+    [],
+  );
+
+  const abort = useCallback(() => {
+    clientRef.current?.abort().catch(() => {
+      // Fire-and-forget: a rejection here means the underlying worker is
+      // already gone (e.g. a modelId change terminated it), which is not
+      // an error from the caller's perspective — there's nothing left to
+      // abort.
+    });
+  }, []);
+
+  return {
+    ...state,
+    isGenerating,
+    generationError,
+    generate,
+    streamGenerate,
+    abort,
+  };
+}
+
+async function* streamGenerateImpl(
+  statusRef: { current: ModelLoadStatus },
+  clientRef: { current: EngineClient | null },
+  isGeneratingRef: { current: boolean },
+  setIsGenerating: (value: boolean) => void,
+  setGenerationError: (value: Error | null) => void,
+  messages: ChatCompletionMessageParam[],
+): AsyncGenerator<string, void, void> {
+  if (statusRef.current !== "ready" || !clientRef.current) {
+    throw new HookNotReadyError();
+  }
+  if (isGeneratingRef.current) {
+    throw new HookBusyError();
+  }
+
+  const client = clientRef.current;
+  isGeneratingRef.current = true;
+  setIsGenerating(true);
+  setGenerationError(null);
+  try {
+    yield* toAsyncGenerator((onToken) => client.streamGenerate(messages, onToken));
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    setGenerationError(error);
+    throw error;
+  } finally {
+    isGeneratingRef.current = false;
+    setIsGenerating(false);
+    // Always signal the worker to stop, whether we finished naturally or
+    // the consumer `break`s out of a `for await` early — interruptGenerate()
+    // on an already-finished generation is a harmless no-op, but skipping
+    // this on early exit would leave the worker's inference loop (and GPU
+    // compute) running unattended. A rejection here means the worker is
+    // already gone (e.g. a modelId change terminated it mid-stream), which
+    // isn't an error from the caller's perspective.
+    client.abort().catch(() => {});
+  }
 }

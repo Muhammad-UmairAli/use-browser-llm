@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useLocalLLM } from "../src/use-local-llm.js";
 import type { EngineClient } from "../src/engine-client.js";
@@ -17,7 +17,7 @@ function makeFakeClient(
     loadModel: vi.fn().mockResolvedValue(undefined),
     generate: vi.fn(),
     streamGenerate: vi.fn(),
-    abort: vi.fn(),
+    abort: vi.fn().mockResolvedValue(undefined),
     unload: vi.fn().mockResolvedValue(undefined),
     terminate: vi.fn(),
     ...overrides,
@@ -25,6 +25,7 @@ function makeFakeClient(
 }
 
 afterEach(() => {
+  cleanup();
   vi.clearAllMocks();
 });
 
@@ -32,11 +33,11 @@ describe("useLocalLLM", () => {
   it("starts idle when no modelId is given", () => {
     const { result } = renderHook(() => useLocalLLM(undefined));
 
-    expect(result.current).toEqual({
-      status: "idle",
-      progress: 0,
-      error: null,
-    });
+    expect(result.current.status).toBe("idle");
+    expect(result.current.progress).toBe(0);
+    expect(result.current.error).toBeNull();
+    expect(result.current.isGenerating).toBe(false);
+    expect(result.current.generationError).toBeNull();
     expect(engineClientModule.createEngineClient).not.toHaveBeenCalled();
   });
 
@@ -130,22 +131,29 @@ describe("useLocalLLM", () => {
     });
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-    const { result, unmount } = renderHook(() => useLocalLLM("test-model"));
-    const stateBeforeUnmount = result.current;
+    const { unmount } = renderHook(() => useLocalLLM("test-model"));
     unmount();
 
+    // The real regression guard: cleanup ran (worker terminated) — this
+    // fails if the effect's cleanup function is ever removed or
+    // conditionally skipped.
     expect(fakeClient.terminate).toHaveBeenCalledOnce();
 
-    // If the cancelled-flag guard were missing, these post-unmount calls
-    // would still dispatch, and result.current would change (or React
-    // would warn/throw on an update to an unmounted component's state).
+    // Note: once truly unmounted, RTL's `result.current` can never reflect
+    // a post-unmount state change regardless of whether the `cancelled`
+    // guard exists (there's no component left to re-render), so comparing
+    // it before/after would pass either way. What we CAN meaningfully
+    // assert is that firing the stale callbacks doesn't throw or reject —
+    // if the `cancelled` check were removed, `dispatch` would still be
+    // called on an unmounted component, which React 18 silently no-ops
+    // rather than warning on, so this wouldn't a regression guard for the
+    // dispatch itself, but it would catch a guard implemented incorrectly
+    // (e.g. throwing instead of no-op'ing).
     await act(async () => {
       progressCallback?.({ progress: 0.9 });
       resolveLoad?.();
       await Promise.resolve();
     });
-
-    expect(result.current).toEqual(stateBeforeUnmount);
   });
 
   it("terminates the previous client and starts a fresh one when modelId changes mid-load", () => {
@@ -173,5 +181,171 @@ describe("useLocalLLM", () => {
       "model-b",
       expect.any(Function),
     );
+  });
+
+  async function renderReadyHook(overrides: Partial<EngineClient> = {}) {
+    const fakeClient = makeFakeClient(overrides);
+    engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+    const rendered = renderHook(() => useLocalLLM("test-model"));
+    await waitFor(() => expect(rendered.result.current.status).toBe("ready"));
+    return { ...rendered, fakeClient };
+  }
+
+  describe("generate", () => {
+    it("resolves with the full completion text", async () => {
+      const { result, fakeClient } = await renderReadyHook({
+        generate: vi.fn().mockResolvedValue("hello world"),
+      });
+
+      let generated: string | undefined;
+      await act(async () => {
+        generated = await result.current.generate([
+          { role: "user", content: "hi" },
+        ]);
+      });
+
+      expect(generated).toBe("hello world");
+      expect(fakeClient.generate).toHaveBeenCalledWith([
+        { role: "user", content: "hi" },
+      ]);
+      expect(result.current.isGenerating).toBe(false);
+    });
+
+    it("rejects with HookNotReadyError when called before ready", async () => {
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+      expect(result.current.status).toBe("loading");
+
+      await expect(
+        result.current.generate([{ role: "user", content: "hi" }]),
+      ).rejects.toThrow("cannot generate before the model is ready");
+    });
+
+    it("rejects with HookBusyError on an overlapping call", async () => {
+      const box: { resolveFirst: ((value: string) => void) | null } = {
+        resolveFirst: null,
+      };
+      const { result } = await renderReadyHook({
+        generate: vi.fn(
+          () =>
+            new Promise<string>((resolve) => {
+              box.resolveFirst = resolve;
+            }),
+        ),
+      });
+
+      let firstCallDone = false;
+      const firstCallPromise = result.current
+        .generate([{ role: "user", content: "one" }])
+        .then(() => {
+          firstCallDone = true;
+        });
+
+      await waitFor(() => expect(result.current.isGenerating).toBe(true));
+      await expect(
+        result.current.generate([{ role: "user", content: "two" }]),
+      ).rejects.toThrow("a generation is already in progress");
+
+      box.resolveFirst?.("done");
+      await firstCallPromise;
+      expect(firstCallDone).toBe(true);
+    });
+
+    it("sets generationError when the client rejects", async () => {
+      const { result } = await renderReadyHook({
+        generate: vi.fn().mockRejectedValue(new Error("engine exploded")),
+      });
+
+      await act(async () => {
+        await expect(
+          result.current.generate([{ role: "user", content: "hi" }]),
+        ).rejects.toThrow("engine exploded");
+      });
+
+      expect(result.current.generationError?.message).toBe(
+        "engine exploded",
+      );
+      expect(result.current.isGenerating).toBe(false);
+    });
+  });
+
+  describe("streamGenerate", () => {
+    it("yields tokens incrementally", async () => {
+      const { result } = await renderReadyHook({
+        streamGenerate: vi.fn(async (_messages, onToken) => {
+          onToken("hel");
+          onToken("lo");
+        }),
+      });
+
+      const tokens: string[] = [];
+      await act(async () => {
+        for await (const token of result.current.streamGenerate([
+          { role: "user", content: "hi" },
+        ])) {
+          tokens.push(token);
+        }
+      });
+
+      expect(tokens).toEqual(["hel", "lo"]);
+      expect(result.current.isGenerating).toBe(false);
+    });
+
+    it("calls abort() when the consumer breaks out early", async () => {
+      const box: { released: (() => void) | null } = { released: null };
+      const fakeAbort = vi.fn().mockResolvedValue(undefined);
+      const { result } = await renderReadyHook({
+        abort: fakeAbort,
+        streamGenerate: vi.fn(
+          (_messages, onToken) =>
+            new Promise<void>((resolve) => {
+              onToken("first");
+              onToken("second");
+              box.released = resolve;
+            }),
+        ),
+      });
+
+      await act(async () => {
+        for await (const token of result.current.streamGenerate([
+          { role: "user", content: "hi" },
+        ])) {
+          if (token === "first") {
+            break;
+          }
+        }
+      });
+
+      expect(fakeAbort).toHaveBeenCalledOnce();
+      box.released?.();
+    });
+
+    it("rejects with HookNotReadyError when called before ready", async () => {
+      const fakeClient = makeFakeClient({
+        loadModel: vi.fn(() => new Promise<void>(() => {})),
+      });
+      engineClientModule.createEngineClient.mockReturnValue(fakeClient);
+      const { result } = renderHook(() => useLocalLLM("test-model"));
+
+      const gen = result.current.streamGenerate([
+        { role: "user", content: "hi" },
+      ]);
+      await expect(gen.next()).rejects.toThrow(
+        "cannot generate before the model is ready",
+      );
+    });
+  });
+
+  describe("abort", () => {
+    it("delegates to the engine client's abort", async () => {
+      const { result, fakeClient } = await renderReadyHook();
+
+      result.current.abort();
+
+      expect(fakeClient.abort).toHaveBeenCalledOnce();
+    });
   });
 });
