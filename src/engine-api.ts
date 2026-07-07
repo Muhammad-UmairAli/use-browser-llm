@@ -29,4 +29,8 @@ export interface EngineAPI {
   ): Promise<void>;
   abort(): Promise<void>;
   unload(): Promise<void>;
+  /** Whether `modelId` is already downloaded (IndexedDB), without
+   * triggering a download. Read-only — surfaces web-llm's own cache
+   * tracking, doesn't build a new one. */
+  checkCache(modelId: string): Promise<boolean>;
 }

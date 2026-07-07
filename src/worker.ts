@@ -1,5 +1,5 @@
 import * as Comlink from "comlink";
-import { MLCEngine } from "@mlc-ai/web-llm";
+import { hasModelInCache, MLCEngine } from "@mlc-ai/web-llm";
 import { createEngineAPI } from "./engine-api-factory.js";
 
 // The only module that ever touches the real @mlc-ai/web-llm engine. We use
@@ -14,4 +14,4 @@ import { createEngineAPI } from "./engine-api-factory.js";
 // that recovery path doesn't apply here — but if this ever migrates to a
 // ServiceWorker (e.g. for offline/extension use), reload-recovery would
 // need to be reintroduced by hand.
-Comlink.expose(createEngineAPI(new MLCEngine()));
+Comlink.expose(createEngineAPI(new MLCEngine(), hasModelInCache));

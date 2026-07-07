@@ -28,7 +28,7 @@ describe("createEngineAPI", () => {
         cb({ progress: 1, text: "done" } as InitProgressReport);
       }),
     });
-    const api = createEngineAPI(fakeEngine);
+    const api = createEngineAPI(fakeEngine, vi.fn().mockResolvedValue(false));
 
     await api.loadModel("test-model", (report) => reports.push(report));
 
@@ -44,7 +44,7 @@ describe("createEngineAPI", () => {
         choices: [{ message: { content: "hello world" } }],
       }) as unknown as EngineLike["chatCompletion"],
     });
-    const api = createEngineAPI(fakeEngine);
+    const api = createEngineAPI(fakeEngine, vi.fn().mockResolvedValue(false));
 
     const result = await api.generate([{ role: "user", content: "hi" }]);
 
@@ -68,7 +68,7 @@ describe("createEngineAPI", () => {
           fakeStream(),
         ) as unknown as EngineLike["chatCompletion"],
     });
-    const api = createEngineAPI(fakeEngine);
+    const api = createEngineAPI(fakeEngine, vi.fn().mockResolvedValue(false));
     const tokens: string[] = [];
 
     await api.streamGenerate(
@@ -81,7 +81,7 @@ describe("createEngineAPI", () => {
 
   it("abort delegates to engine.interruptGenerate", async () => {
     const fakeEngine = makeFakeEngine();
-    const api = createEngineAPI(fakeEngine);
+    const api = createEngineAPI(fakeEngine, vi.fn().mockResolvedValue(false));
 
     await api.abort();
 
@@ -90,10 +90,21 @@ describe("createEngineAPI", () => {
 
   it("unload delegates to engine.unload", async () => {
     const fakeEngine = makeFakeEngine();
-    const api = createEngineAPI(fakeEngine);
+    const api = createEngineAPI(fakeEngine, vi.fn().mockResolvedValue(false));
 
     await api.unload();
 
     expect(fakeEngine.unload).toHaveBeenCalledOnce();
+  });
+
+  it("checkCache delegates to the injected checkCache function", async () => {
+    const fakeEngine = makeFakeEngine();
+    const fakeCheckCache = vi.fn().mockResolvedValue(true);
+    const api = createEngineAPI(fakeEngine, fakeCheckCache);
+
+    const result = await api.checkCache("test-model");
+
+    expect(result).toBe(true);
+    expect(fakeCheckCache).toHaveBeenCalledWith("test-model");
   });
 });

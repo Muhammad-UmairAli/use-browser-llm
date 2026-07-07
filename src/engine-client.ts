@@ -18,6 +18,7 @@ export interface EngineClient {
   ): Promise<void>;
   abort(): Promise<void>;
   unload(): Promise<void>;
+  checkCache(modelId: string): Promise<boolean>;
   /** Terminates the underlying Worker. Not part of EngineAPI — this is a
    * main-thread-only lifecycle operation, not something to proxy. */
   terminate(): void;
@@ -67,6 +68,9 @@ export function createEngineClient(): EngineClient {
     },
     unload() {
       return remote.unload();
+    },
+    checkCache(modelId) {
+      return remote.checkCache(modelId);
     },
     terminate() {
       worker.terminate();

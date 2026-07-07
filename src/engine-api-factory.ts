@@ -34,8 +34,16 @@ export interface EngineLike {
  * Builds the Comlink-exposed EngineAPI on top of an MLCEngine-shaped
  * object. Pure wiring, no side effects — worker.ts is the only place this
  * is combined with a real MLCEngine and Comlink.expose().
+ *
+ * `checkCache` is injected separately (not part of `EngineLike`) because
+ * `hasModelInCache` is a standalone function on @mlc-ai/web-llm, not a
+ * method on MLCEngine instances — same dependency-injection pattern as
+ * `engine`, so tests can fake it without touching real IndexedDB.
  */
-export function createEngineAPI(engine: EngineLike): EngineAPI {
+export function createEngineAPI(
+  engine: EngineLike,
+  checkCache: (modelId: string) => Promise<boolean>,
+): EngineAPI {
   return {
     async loadModel(modelId, onProgress) {
       engine.setInitProgressCallback(onProgress);
@@ -69,6 +77,10 @@ export function createEngineAPI(engine: EngineLike): EngineAPI {
 
     async unload() {
       await engine.unload();
+    },
+
+    async checkCache(modelId) {
+      return checkCache(modelId);
     },
   };
 }
