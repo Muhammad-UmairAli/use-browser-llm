@@ -27,3 +27,36 @@ flowchart LR
 ---
 
 <!-- Add and update component diagrams below as the system grows -->
+
+## use-local-llm: Worker + Comlink RPC boundary
+
+Introduced in P1-03. The only place the raw `@mlc-ai/web-llm` engine is
+touched is inside the Worker; the main thread only ever talks to it through
+a Comlink-typed proxy. `EngineAPI` (`src/engine-api.ts`) is the shared
+contract both sides compile against without cross-importing each other's
+lib-specific globals (DOM vs WebWorker).
+
+```mermaid
+flowchart LR
+    subgraph MainThread["Main thread [built]"]
+        hook["useLocalLLM() hook [planned — P1-04/05]"]
+        client["engine-client.ts\ncreateEngineClient() [built]"]
+        hook -.-> client
+    end
+
+    subgraph Worker["Dedicated Worker [built]"]
+        api["engine-api-factory.ts\ncreateEngineAPI() [built]"]
+        engine["@mlc-ai/web-llm\nMLCEngine [built]"]
+        api --> engine
+    end
+
+    client -- "Comlink.wrap<EngineAPI>()\n(postMessage RPC)" --> api
+
+    style hook stroke-dasharray: 5 5
+```
+
+Notes:
+
+- `EngineAPI` is exposed via `Comlink.expose()` in `worker.ts`, never web-llm's own `WebWorkerMLCEngine`/`Handler` — see `.claude/epics/use-local-llm/epic.md`'s Scope Deltas for why both would have been redundant.
+- Callback arguments (`onProgress`, `onToken`) cross the boundary via `Comlink.proxy()`, not plain function references — Comlink does not auto-proxy functions.
+- The hook node above is dashed/planned — P1-04 (state machine) and P1-05 (generate/streamGenerate) will consume `createEngineClient()` from the main thread; this diagram will flip that node to `[built]` when those merge.

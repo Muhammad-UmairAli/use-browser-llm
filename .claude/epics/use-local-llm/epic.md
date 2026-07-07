@@ -94,7 +94,7 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 ## Tasks Created
 - [x] 001.md - Package scaffolding & build tooling (parallel: false) — merged PR #2
 - [x] 002.md - WebGPU capability detection utility (parallel: true) — adds fallback-adapter reason beyond literal AC, logged as scope delta below
-- [ ] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true)
+- [x] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true) — reconciled MLCEngine+Comlink design, see Scope Deltas
 - [ ] 004.md - Hook state machine for model loading (parallel: false)
 - [ ] 005.md - Hook generate/streamGenerate API + cancellation (parallel: false)
 - [ ] 006.md - Cache-status exposure (parallel: true)
@@ -113,3 +113,4 @@ Estimated total effort: 29.19 h (with-AI) / 78.30 h (baseline)
 Implementation decisions that went beyond a task's literal acceptance criteria, noted here for traceability rather than added to SPLIT-PLAN §6 (backlog):
 
 - **002 (WebGPU capability detection):** added a `"fallback-adapter"` reason (`adapter.info.isFallbackAdapter`) beyond the AC's two literal reasons (`no-navigator-gpu`, `no-adapter`). A software/fallback adapter exists but can't usefully run LLM inference, so it's surfaced as unsupported. Reviewed and accepted as an additive, non-breaking union member. Possible future follow-up (not scheduled): a distinct `requestDevice()`-level feature check (e.g. `shader-f16`) for a stronger capability gate — flagged by review, deferred.
+- **003 (Worker + Comlink):** the epic's original Architecture Decisions named web-llm's `WebWorkerMLCEngine` pattern *and* Comlink together, which turned out to be two overlapping solutions to the same problem — `@mlc-ai/web-llm` ships its own complete worker-RPC layer (`WebWorkerMLCEngineHandler`/`WebWorkerMLCEngine`) that already does what Comlink was brought in for. Recommended dropping Comlink; overruled by the human, who chose to keep it. Reconciled by using the bare `MLCEngine` (not `WebWorkerMLCEngine`/`Handler`) inside our own worker, wrapped only by our own Comlink-exposed `EngineAPI` — one RPC layer, not two. Reviewed and confirmed sound (the only thing given up is `reloadIfUnmatched()`'s ServiceWorker-recovery logic, which doesn't apply to a dedicated Worker; would need reintroducing if this ever migrates to a ServiceWorker). Advisory notes from that review, not yet actioned: no input validation on the `messages` array at the API boundary; no timeout handling on `reload()`/`chatCompletion()`; `engine-client.test.ts` doesn't yet exercise a full Comlink RPC round-trip (only construction + termination).
