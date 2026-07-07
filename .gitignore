@@ -39,3 +39,6 @@ TODO.md
 
 # External CCPM clone — installed per-adopter via the setup wizard, not vendored
 .claude/ccpm/
+
+# Vitest browser-mode failure screenshots (test:integration)
+test/integration/__screenshots__/
