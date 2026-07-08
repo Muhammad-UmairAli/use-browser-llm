@@ -34,3 +34,46 @@ jobs:
         with:
           python-version: "3.11"
       - uses: pre-commit/action@v3.0.1
+
+  package:
+    name: Lint, typecheck & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Verify the worker chunk never leaks into the main bundle
+        run: |
+          if grep -q "MLCEngine" dist/index.js; then
+            echo "MLCEngine found in dist/index.js — the worker chunk has leaked into the main bundle."
+            exit 1
+          fi
+
+  worker-integration:
+    name: Worker boundary integration test
+    runs-on: ubuntu-latest
+    # Real headless Chromium via Playwright, not WebGPU — checkCache() only
+    # touches IndexedDB, so this runs fine without a GPU-capable runner.
+    # No branch-protection ruleset currently requires this check to pass
+    # (see .github/rulesets/*.json), so a failure here shows up red but
+    # doesn't block a merge on its own — no continue-on-error needed to
+    # get that behavior, and this way a real regression stays visible
+    # instead of being silently swallowed.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:integration

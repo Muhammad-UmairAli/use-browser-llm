@@ -1,0 +1,44 @@
+name: Publish
+
+# Gated on a v* tag push ONLY — never runs on a merge to develop/main.
+# Cut a release by tagging a commit on main (e.g. after merging a
+# release/* branch under Git Flow) with `git tag vX.Y.Z && git push origin
+# vX.Y.Z`. Requires an NPM_TOKEN repo secret with publish rights for
+# use-browser-llm before this can actually publish — add it in
+# Settings > Secrets and variables > Actions before the first release.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # for npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "$PKG_VERSION" != "$TAG_NAME" ]; then
+            echo "Tag $TAG_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm publish --no-git-checks --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

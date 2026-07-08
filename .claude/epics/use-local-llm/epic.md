@@ -1,9 +1,9 @@
 ---
 name: use-local-llm
-status: backlog
+status: completed
 created: 2026-07-07T11:47:41Z
-updated: 2026-07-07T11:47:41Z
-progress: 0%
+updated: 2026-07-08T07:04:43Z
+progress: 100%
 prd: .claude/prds/use-local-llm.md
 github: (will be set on sync)
 ---
@@ -18,7 +18,9 @@ Ship `useLocalLLM()` — a single headless React hook that wraps `@mlc-ai/web-ll
 
 - **Engine**: `@mlc-ai/web-llm`'s `WebWorkerMLCEngine` pattern — chosen over `transformers.js` because it ships a worker-ready engine split already built for this exact use case, minimizing custom worker-lifecycle code for Phase 1 (Stack A from the technology-stack review).
 - **Worker RPC**: `comlink` proxies the engine's async API across the `postMessage` boundary instead of a hand-rolled message protocol — removes message-typing/correlation boilerplate at the cost of one small dependency.
-- **Build**: `tsup` producing dual ESM/CJS output for the main entry plus a separate worker bundle chunk, so the worker code is never pulled into the consumer's main-thread bundle.
+- **Build**: `tsup` producing an **ESM-only** output for the main entry plus a separate worker bundle chunk, so the worker code is never pulled into the consumer's main-thread bundle. (Revised from dual ESM/CJS during P1-01 review: `@mlc-ai/web-llm` is ESM-first, so a CJS build would throw `ERR_REQUIRE_ESM` for CJS consumers; ESM-only is also the natural fit for a browser/WebGPU-only package with no CJS-consumer obligation.) The worker file ships as a `dist/` asset, not as a public `exports` subpath — it's loaded internally via `new URL('./worker.js', import.meta.url)`, the pattern bundlers actually resolve worker chunks through.
+- **Two `tsconfig` files**: `tsconfig.json` (DOM lib) typechecks the main-thread entry, `tsconfig.worker.json` (WebWorker lib) typechecks the worker entry — TypeScript's `dom` and `webworker` libs declare conflicting globals and cannot share one config.
+- **License: MIT.**
 - **Public API stays engine-agnostic in naming/shape** (e.g. no `web-llm`-specific types leak into the hook's return value) so a future pluggable-adapter epic (transformers.js, etc.) is additive, not a breaking change. That adapter abstraction itself is explicitly deferred out of this epic.
 - **Testing**: Vitest with a mocked-engine path for the hook's state machine (runs in CI without a GPU); a browser/Playwright-driven path is reserved for manual/real-WebGPU smoke testing, not CI-blocking for Phase 1.
 
@@ -87,21 +89,34 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 | 009 | README + usage docs | 0.75 |
 | 010 | Public API polish, type exports & npm publish config/CI | 7.28 |
 
-**Total with-AI estimate: 29.19 h** (baseline sum: 78.30 h).
+**Total with-AI estimate: 29.19 h** (baseline sum: 80.90 h).
 
 ## Tasks Created
-- [ ] 001.md - Package scaffolding & build tooling (parallel: false)
-- [ ] 002.md - WebGPU capability detection utility (parallel: true)
-- [ ] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true)
-- [ ] 004.md - Hook state machine for model loading (parallel: false)
-- [ ] 005.md - Hook generate/streamGenerate API + cancellation (parallel: false)
-- [ ] 006.md - Cache-status exposure (parallel: true)
-- [ ] 007.md - Error handling & unsupported-browser fallback path (parallel: true)
-- [ ] 008.md - Unit tests (mocked engine) + worker-boundary integration harness (parallel: false)
-- [ ] 009.md - README + usage docs (parallel: true)
-- [ ] 010.md - Public API polish, type exports & npm publish config/CI (parallel: false)
+- [x] 001.md - Package scaffolding & build tooling (parallel: false) — merged PR #2
+- [x] 002.md - WebGPU capability detection utility (parallel: true) — adds fallback-adapter reason beyond literal AC, logged as scope delta below
+- [x] 003.md - Web Worker wrapping @mlc-ai/web-llm via Comlink (parallel: true) — reconciled MLCEngine+Comlink design, see Scope Deltas
+- [x] 004.md - Hook state machine for model loading (parallel: false) — wired into public index.ts, replacing the P1-01 placeholder
+- [x] 005.md - Hook generate/streamGenerate API + cancellation (parallel: false) — added HookBusyError re-entrancy guard, see Scope Deltas
+- [x] 006.md - Cache-status exposure (parallel: true) — routed through worker to preserve web-llm bundle isolation
+- [x] 007.md - Error handling & unsupported-browser fallback path (parallel: true) — added load-inactivity watchdog beyond literal AC, see Scope Deltas
+- [x] 008.md - Unit tests (mocked engine) + worker-boundary integration harness (parallel: false) — real-browser Worker+Comlink test added, see Scope Deltas
+- [x] 009.md - README + usage docs (parallel: true) — examples typechecked against real API, not live-browser tested; see Scope Deltas
+- [x] 010.md - Public API polish, type exports & npm publish config/CI (parallel: false) — last Phase 1 task, see Scope Deltas
 
 Total tasks: 10
 Parallel tasks: 5
 Sequential tasks: 5
-Estimated total effort: 29.19 h (with-AI) / 78.30 h (baseline)
+Estimated total effort: 29.19 h (with-AI) / 80.90 h (baseline)
+
+## Scope Deltas
+
+Implementation decisions that went beyond a task's literal acceptance criteria, noted here for traceability rather than added to SPLIT-PLAN §6 (backlog):
+
+- **002 (WebGPU capability detection):** added a `"fallback-adapter"` reason (`adapter.info.isFallbackAdapter`) beyond the AC's two literal reasons (`no-navigator-gpu`, `no-adapter`). A software/fallback adapter exists but can't usefully run LLM inference, so it's surfaced as unsupported. Reviewed and accepted as an additive, non-breaking union member. Possible future follow-up (not scheduled): a distinct `requestDevice()`-level feature check (e.g. `shader-f16`) for a stronger capability gate — flagged by review, deferred.
+- **003 (Worker + Comlink):** the epic's original Architecture Decisions named web-llm's `WebWorkerMLCEngine` pattern *and* Comlink together, which turned out to be two overlapping solutions to the same problem — `@mlc-ai/web-llm` ships its own complete worker-RPC layer (`WebWorkerMLCEngineHandler`/`WebWorkerMLCEngine`) that already does what Comlink was brought in for. Recommended dropping Comlink; overruled by the human, who chose to keep it. Reconciled by using the bare `MLCEngine` (not `WebWorkerMLCEngine`/`Handler`) inside our own worker, wrapped only by our own Comlink-exposed `EngineAPI` — one RPC layer, not two. Reviewed and confirmed sound (the only thing given up is `reloadIfUnmatched()`'s ServiceWorker-recovery logic, which doesn't apply to a dedicated Worker; would need reintroducing if this ever migrates to a ServiceWorker). Advisory notes from that review, not yet actioned: no input validation on the `messages` array at the API boundary; no timeout handling on `reload()`/`chatCompletion()`; `engine-client.test.ts` doesn't yet exercise a full Comlink RPC round-trip (only construction + termination).
+- **005 (generate/streamGenerate + cancellation):** added a `HookBusyError` re-entrancy guard beyond the task's 4 literal AC bullets — not requested explicitly, but required for correctness since `generate`/`streamGenerate` share one `MLCEngine` and one `isGenerating` flag; an unguarded overlapping call would corrupt shared state. Reviewed and confirmed necessary. One advisory not yet actioned: `statusRef.current = state.status` is mirrored directly in the render body (not `useLayoutEffect`) — safe for this hook's current usage (no Suspense/concurrent-render triggers touching `generate` mid-render) but not strictly render-safe under future concurrent features; `isGeneratingRef` has no such concern since it's only mutated in event-driven code.
+- **007 (error handling & unsupported-browser fallback):** an approach review caught that `worker.addEventListener('error', ...)` alone does not reliably catch a browser OOM-kill (the worker silently dies with no event, leaving the pending RPC promise hanging forever) — added a 30s load-inactivity watchdog (reset on every progress tick) in `use-local-llm.ts` as the real backstop for that case, keeping the `error`/`messageerror` listeners (`EngineClient.onCrash()`) as additional cheap coverage for JS-level uncaught exceptions. **Documented scope boundary:** crash/watchdog detection is scoped to the model-LOADING phase only — a worker crash or silent death during `generate()`/`streamGenerate()` (P1-05) is not covered by this task and would still hang; extending the same watchdog pattern to generation is the natural next step if that gap needs closing, not a separate mechanism. This is a sequencing decision, not an omission.
+- **009 (README + usage docs):** "every code example verified to run as written" was verified by temporarily pasting each TSX example into a scratch file and running `pnpm typecheck` against the real shipped API (then deleting the scratch file — never committed), not by running them in a live browser. This environment has no WebGPU-capable browser to actually download a model and exercise generate/stream/abort end-to-end. Typecheck confirms the examples compile against the real API shape; it can't confirm a runtime-valid model id, that generation output is sensible, or that `abort()` actually halts inference in a real browser. A Playwright e2e against real Chrome (`--enable-unsafe-webgpu`) is the natural stronger check if this gap needs closing — not scheduled.
+- **008 (test completeness + worker-boundary integration):** the real-Worker integration test (`test/integration/worker-boundary.browser.test.ts`, via `@vitest/browser` + Playwright Chromium) deliberately calls only `checkCache()` — the one `EngineAPI` method needing neither WebGPU nor a model download (pure IndexedDB read via `hasModelInCache`), so it stays fast and GPU-free while still proving the real `worker.ts` + real `Comlink.wrap()` round-trip works. **Known gap, not actioned:** this proves the simplest scalar round-trip but doesn't exercise Comlink's callback-proxy path (`Comlink.proxy()`), which is what `streamGenerate`'s token streaming and `loadModel`'s progress callback actually rely on in production — the highest-risk part of the boundary is still only covered by mocked-`Worker` unit tests (`engine-client.test.ts`), not a real browser. Extending this integration test to cover a proxied callback (without needing real WebGPU) is the natural next step if this gap needs closing.
+- Also: `@vitest/browser` is pinned to the exact version `2.1.9` (no `^` range) rather than the caret ranges used elsewhere in `package.json`, because it declares a peerDependency on the *exact* `vitest` version (`@vitest/browser@4.1.10` requires `vitest@4.1.10` exactly — a real incompatibility caught before use, since this project is on `vitest@^2.1.8`). An isolated exact pin is easy for a future contributor to "normalize" back to a caret and silently break; flagging the coupling here since JSON has no inline-comment mechanism to note it at the point of use.
+- **Post-close: package renamed to `use-browser-llm`.** Before the first real `npm publish`, discovered the reserved name `use-local-llm` was already taken on the npm registry by an unrelated, pre-existing package (a different, server-based local-LLM React hook — not this project's browser/WebGPU approach). Renamed the npm package, the exported hook (`useLocalLLM` → `useBrowserLLM`), source/test file names, the GitHub repo, and all user-facing docs to `use-browser-llm`/`useBrowserLLM`. This CCPM epic's directory (`.claude/epics/use-local-llm/`) and the PRD/epic frontmatter `name:` field were deliberately left unchanged — they're the internal Phase 1 planning identifier, not the published package name, and renaming closed historical planning docs after the fact would be revisionist for no functional benefit. Only the `github:` URL fields in each task file were updated (mechanical link-validity fix, same treatment as the earlier `react-local-llm` → `use-local-llm` repo rename).
