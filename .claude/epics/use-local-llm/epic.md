@@ -1,9 +1,9 @@
 ---
 name: use-local-llm
-status: backlog
+status: completed
 created: 2026-07-07T11:47:41Z
-updated: 2026-07-07T11:47:41Z
-progress: 0%
+updated: 2026-07-08T07:04:43Z
+progress: 100%
 prd: .claude/prds/use-local-llm.md
 github: (will be set on sync)
 ---
@@ -89,7 +89,7 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 | 009 | README + usage docs | 0.75 |
 | 010 | Public API polish, type exports & npm publish config/CI | 7.28 |
 
-**Total with-AI estimate: 29.19 h** (baseline sum: 78.30 h).
+**Total with-AI estimate: 29.19 h** (baseline sum: 80.90 h).
 
 ## Tasks Created
 - [x] 001.md - Package scaffolding & build tooling (parallel: false) — merged PR #2
@@ -106,7 +106,7 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 Total tasks: 10
 Parallel tasks: 5
 Sequential tasks: 5
-Estimated total effort: 29.19 h (with-AI) / 78.30 h (baseline)
+Estimated total effort: 29.19 h (with-AI) / 80.90 h (baseline)
 
 ## Scope Deltas
 
