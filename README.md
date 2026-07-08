@@ -227,16 +227,21 @@ function useLocalLLM(modelId: string | undefined): {
   cacheStatus: "idle" | "checking" | "cached" | "downloading";
   isGenerating: boolean;
   generationError: Error | null;
-  generate(messages: ChatCompletionMessageParam[]): Promise<string>;
-  streamGenerate(
-    messages: ChatCompletionMessageParam[],
-  ): AsyncGenerator<string, void, void>;
+  generate(messages: ChatMessage[]): Promise<string>;
+  streamGenerate(messages: ChatMessage[]): AsyncGenerator<string, void, void>;
   abort(): void;
+};
+
+type ChatMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
 };
 ```
 
-`ChatCompletionMessageParam` is the same OpenAI-style chat message shape
-`@mlc-ai/web-llm` itself uses — e.g. `{ role: "user", content: "..." }`.
+`ChatMessage` is a plain, self-contained type — e.g.
+`{ role: "user", content: "..." }` — not a re-export of
+`@mlc-ai/web-llm`'s own message type, so this package's public API never
+requires you to know anything about the underlying engine.
 
 ## License
 

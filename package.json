@@ -30,6 +30,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
+    "prepack": "pnpm build",
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "lint": "eslint .",

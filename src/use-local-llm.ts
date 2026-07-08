@@ -8,7 +8,7 @@ import {
   UnsupportedError,
   WorkerCrashError,
 } from "./errors.js";
-import type { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
+import type { ChatMessage } from "./types.js";
 
 export type ModelLoadStatus =
   | "idle"
@@ -115,9 +115,9 @@ export interface GenerationState {
 }
 
 export interface UseLocalLLMResult extends ModelLoadState, GenerationState {
-  generate(messages: ChatCompletionMessageParam[]): Promise<string>;
+  generate(messages: ChatMessage[]): Promise<string>;
   streamGenerate(
-    messages: ChatCompletionMessageParam[],
+    messages: ChatMessage[],
   ): AsyncGenerator<string, void, void>;
   /** Stops an in-flight generate()/streamGenerate() call, including the
    * worker's inference loop — not just the UI-visible promise. */
@@ -276,7 +276,7 @@ export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
   }, [modelId]);
 
   const generate = useCallback(
-    async (messages: ChatCompletionMessageParam[]): Promise<string> => {
+    async (messages: ChatMessage[]): Promise<string> => {
       if (statusRef.current !== "ready" || !clientRef.current) {
         throw new HookNotReadyError();
       }
@@ -303,7 +303,7 @@ export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
 
   const streamGenerate = useCallback(
     (
-      messages: ChatCompletionMessageParam[],
+      messages: ChatMessage[],
     ): AsyncGenerator<string, void, void> =>
       streamGenerateImpl(
         statusRef,
@@ -341,7 +341,7 @@ async function* streamGenerateImpl(
   isGeneratingRef: { current: boolean },
   setIsGenerating: (value: boolean) => void,
   setGenerationError: (value: Error | null) => void,
-  messages: ChatCompletionMessageParam[],
+  messages: ChatMessage[],
 ): AsyncGenerator<string, void, void> {
   if (statusRef.current !== "ready" || !clientRef.current) {
     throw new HookNotReadyError();

@@ -101,7 +101,7 @@ Sized per-task via `/estimate` (with-AI hours, the figure carried into `/log-tim
 - [x] 007.md - Error handling & unsupported-browser fallback path (parallel: true) — added load-inactivity watchdog beyond literal AC, see Scope Deltas
 - [x] 008.md - Unit tests (mocked engine) + worker-boundary integration harness (parallel: false) — real-browser Worker+Comlink test added, see Scope Deltas
 - [x] 009.md - README + usage docs (parallel: true) — examples typechecked against real API, not live-browser tested; see Scope Deltas
-- [ ] 010.md - Public API polish, type exports & npm publish config/CI (parallel: false)
+- [x] 010.md - Public API polish, type exports & npm publish config/CI (parallel: false) — last Phase 1 task, see Scope Deltas
 
 Total tasks: 10
 Parallel tasks: 5

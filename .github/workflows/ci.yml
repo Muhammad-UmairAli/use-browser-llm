@@ -49,6 +49,13 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm build
+      - name: Verify the worker chunk never leaks into the main bundle
+        run: |
+          if grep -q "MLCEngine" dist/index.js; then
+            echo "MLCEngine found in dist/index.js — the worker chunk has leaked into the main bundle."
+            exit 1
+          fi
 
   worker-integration:
     name: Worker boundary integration test
