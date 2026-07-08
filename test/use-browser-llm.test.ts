@@ -609,4 +609,351 @@ describe("useBrowserLLM", () => {
       expect(result.current.cacheStatus).toBe("idle");
     });
   });
+
+  /**
+   * Renders a ready hook backed by a fake client whose onCrash() tracks
+   * EVERY registered listener (not just the most recent), so triggerCrash()
+   * faithfully simulates a real crash event reaching every subscriber —
+   * matching production, where both the load effect's onCrash and
+   * generate()/streamGenerate()'s own onCrash are simultaneously subscribed
+   * and both fire on the same event.
+   */
+  async function renderReadyHookWithCrashTracking(
+    overrides: Partial<EngineClient> = {},
+  ) {
+    const listeners: Array<(error: Error) => void> = [];
+    const onCrash = vi.fn((listener: (error: Error) => void) => {
+      listeners.push(listener);
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index !== -1) {
+          listeners.splice(index, 1);
+        }
+      };
+    });
+    const rendered = await renderReadyHook({ onCrash, ...overrides });
+    return {
+      ...rendered,
+      triggerCrash(error: Error) {
+        for (const listener of [...listeners]) {
+          listener(error);
+        }
+      },
+    };
+  }
+
+  describe("generate crash/timeout", () => {
+    it("rejects immediately via onCrash, and status transitions to error", async () => {
+      const { result, triggerCrash } = await renderReadyHookWithCrashTracking({
+        generate: vi.fn(() => new Promise<string>(() => {})),
+      });
+
+      let generatePromise: Promise<string> | undefined;
+      act(() => {
+        generatePromise = result.current.generate([
+          { role: "user", content: "hi" },
+        ]);
+      });
+      await waitFor(() => expect(result.current.isGenerating).toBe(true));
+
+      act(() => {
+        triggerCrash(new WorkerCrashError("uncaught exception"));
+      });
+
+      await expect(generatePromise).rejects.toThrow(WorkerCrashError);
+      await waitFor(() => expect(result.current.status).toBe("error"));
+      expect(result.current.isGenerating).toBe(false);
+    });
+
+    it("does NOT transition status on a normal (non-crash) generation failure", async () => {
+      const { result, fakeClient } = await renderReadyHook({
+        generate: vi.fn().mockRejectedValue(new Error("content policy violation")),
+      });
+
+      await act(async () => {
+        await expect(
+          result.current.generate([{ role: "user", content: "hi" }]),
+        ).rejects.toThrow("content policy violation");
+      });
+
+      expect(result.current.generationError?.message).toBe(
+        "content policy violation",
+      );
+      // The model is still loaded and usable — status must stay "ready".
+      expect(result.current.status).toBe("ready");
+      expect(fakeClient.terminate).not.toHaveBeenCalled();
+    });
+
+    it("times out and surfaces WorkerCrashError when the worker silently hangs", async () => {
+      const { result, fakeClient } = await renderReadyHook({
+        generate: vi.fn(() => new Promise<string>(() => {})),
+      });
+
+      vi.useFakeTimers();
+      try {
+        // The assertion is chained onto the promise in the same act() call
+        // that creates it — attaching a rejection handler before the timer
+        // advance below fires, so there's no window where the rejection is
+        // briefly unobserved (which vitest flags as an unhandled rejection
+        // even when a `.rejects` handler is attached moments later).
+        let assertion!: Promise<void>;
+        act(() => {
+          assertion = expect(
+            result.current.generate([{ role: "user", content: "hi" }]),
+          ).rejects.toThrow(WorkerCrashError);
+        });
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(90_000);
+        });
+        await assertion;
+
+        expect(result.current.status).toBe("error");
+        expect(fakeClient.terminate).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("streamGenerate crash/timeout", () => {
+    it("throws WorkerCrashError immediately via onCrash mid-stream", async () => {
+      let capturedOnToken: ((token: string) => void) | null = null;
+      const { result, triggerCrash } = await renderReadyHookWithCrashTracking({
+        streamGenerate: vi.fn((_messages, onToken) => {
+          capturedOnToken = onToken;
+          return new Promise<void>(() => {});
+        }),
+      });
+
+      const tokens: string[] = [];
+      let thrown: unknown;
+      let consume!: Promise<void>;
+      act(() => {
+        consume = (async () => {
+          try {
+            for await (const token of result.current.streamGenerate([
+              { role: "user", content: "hi" },
+            ])) {
+              tokens.push(token);
+            }
+          } catch (err) {
+            thrown = err;
+          }
+        })();
+      });
+      expect(capturedOnToken).not.toBeNull();
+
+      act(() => {
+        capturedOnToken?.("hel");
+      });
+      await waitFor(() => expect(tokens).toEqual(["hel"]));
+
+      act(() => {
+        triggerCrash(new WorkerCrashError("uncaught exception"));
+      });
+      await consume;
+
+      expect(thrown).toBeInstanceOf(WorkerCrashError);
+      await waitFor(() => expect(result.current.status).toBe("error"));
+    });
+
+    it("resets the inactivity watchdog on each token, so steady-but-slow streaming never times out", async () => {
+      let onTokenCb: ((token: string) => void) | null = null;
+      const { result, fakeClient } = await renderReadyHook({
+        streamGenerate: vi.fn((_messages, onToken) => {
+          onTokenCb = onToken;
+          return new Promise<void>(() => {});
+        }),
+      });
+
+      vi.useFakeTimers();
+      try {
+        const tokens: string[] = [];
+        act(() => {
+          void (async () => {
+            for await (const token of result.current.streamGenerate([
+              { role: "user", content: "hi" },
+            ])) {
+              tokens.push(token);
+            }
+          })();
+        });
+        expect(onTokenCb).not.toBeNull();
+
+        // 20s, a token, another 20s — 40s total elapsed but never more
+        // than 20s without a token, so no timeout fires.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+        act(() => {
+          onTokenCb?.("hel");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+
+        expect(result.current.status).toBe("ready");
+        expect(fakeClient.terminate).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("times out and surfaces WorkerCrashError when no token arrives", async () => {
+      const { result, fakeClient } = await renderReadyHook({
+        streamGenerate: vi.fn(() => new Promise<void>(() => {})),
+      });
+
+      vi.useFakeTimers();
+      try {
+        let thrown: unknown;
+        let consume!: Promise<void>;
+        act(() => {
+          consume = (async () => {
+            try {
+              for await (const token of result.current.streamGenerate([
+                { role: "user", content: "hi" },
+              ])) {
+                void token;
+              }
+            } catch (err) {
+              thrown = err;
+            }
+          })();
+        });
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        await consume;
+
+        expect(thrown).toBeInstanceOf(WorkerCrashError);
+        expect(result.current.status).toBe("error");
+        expect(fakeClient.terminate).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still unsticks an abandoned stream when the client was replaced by a new load, without stomping the new client's state", async () => {
+      vi.useFakeTimers();
+      try {
+        let onTokenCb: ((token: string) => void) | null = null;
+        const clientA = makeFakeClient({
+          streamGenerate: vi.fn((_messages, onToken) => {
+            onTokenCb = onToken;
+            return new Promise<void>(() => {});
+          }),
+        });
+        const clientB = makeFakeClient();
+        engineClientModule.createEngineClient
+          .mockReturnValueOnce(clientA)
+          .mockReturnValueOnce(clientB);
+
+        const { result, rerender } = renderHook(
+          ({ modelId }) => useBrowserLLM(modelId),
+          { initialProps: { modelId: "model-a" } },
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(result.current.status).toBe("ready");
+
+        let thrown: unknown;
+        let consume!: Promise<void>;
+        act(() => {
+          consume = (async () => {
+            try {
+              for await (const token of result.current.streamGenerate([
+                { role: "user", content: "hi" },
+              ])) {
+                void token;
+              }
+            } catch (err) {
+              thrown = err;
+            }
+          })();
+        });
+        expect(onTokenCb).not.toBeNull();
+
+        // modelId changes mid-stream: the load effect's cleanup terminates
+        // clientA directly (a plain terminate() fires no onCrash event,
+        // unlike a real crash), and clientB takes over as clientRef.
+        rerender({ modelId: "model-b" });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(result.current.status).toBe("ready");
+
+        // The abandoned stream's own watchdog still fires on schedule and
+        // must unstick its suspended `for await` (otherwise isGeneratingRef
+        // stays stuck true forever, since streamGenerateImpl's finally
+        // block — which resets it — never runs). It must NOT terminate the
+        // new client or dispatch an error over the new client's state.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        await consume;
+
+        expect(thrown).toBeInstanceOf(WorkerCrashError);
+        expect(result.current.status).toBe("ready");
+        expect(clientB.terminate).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("abort() during a live stream still ends gracefully, without throwing", async () => {
+      let onTokenCb: ((token: string) => void) | null = null;
+      let releaseStream: (() => void) | null = null;
+      const { result, fakeClient } = await renderReadyHook({
+        streamGenerate: vi.fn(
+          (_messages, onToken) =>
+            new Promise<void>((resolve) => {
+              onTokenCb = onToken;
+              releaseStream = resolve;
+            }),
+        ),
+      });
+
+      const tokens: string[] = [];
+      let thrown: unknown;
+      let consume!: Promise<void>;
+      act(() => {
+        consume = (async () => {
+          try {
+            for await (const token of result.current.streamGenerate([
+              { role: "user", content: "hi" },
+            ])) {
+              tokens.push(token);
+            }
+          } catch (err) {
+            thrown = err;
+          }
+        })();
+      });
+      expect(onTokenCb).not.toBeNull();
+
+      act(() => {
+        onTokenCb?.("hel");
+      });
+      await waitFor(() => expect(tokens).toEqual(["hel"]));
+
+      // Simulates the existing, already-shipped graceful-cancel contract:
+      // a live worker's interruptGenerate() (via client.abort()) ends the
+      // stream normally — no error — rather than the new crash machinery
+      // firing. This locks in that abort() was deliberately NOT wired to
+      // force-abort the internal AbortController (see abort()'s comment
+      // in src/use-browser-llm.ts).
+      act(() => {
+        result.current.abort();
+        releaseStream?.();
+      });
+      await consume;
+
+      expect(thrown).toBeUndefined();
+      expect(fakeClient.abort).toHaveBeenCalled();
+    });
+  });
 });
