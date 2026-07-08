@@ -17,3 +17,4 @@ export {
   UnsupportedError,
   WorkerCrashError,
 } from "./errors.js";
+export { type ChatMessage, type ChatRole } from "./types.js";
