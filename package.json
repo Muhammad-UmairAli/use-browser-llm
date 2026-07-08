@@ -1,6 +1,6 @@
 {
   "name": "use-browser-llm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless React hook for running LLMs locally in the browser via WebGPU, with zero backend and complete privacy.",
   "license": "MIT",
   "repository": {

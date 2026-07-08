@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { createEngineClient, type EngineClient } from "./engine-client.js";
 import { detectWebGPUSupport } from "./detect-webgpu.js";
 import { toAsyncGenerator } from "./to-async-generator.js";
@@ -61,6 +68,18 @@ const initialState: ModelLoadState = {
 // hang forever). This is a heuristic, not a guarantee: a genuinely slow
 // connection could in principle stall this long between progress ticks.
 const LOAD_INACTIVITY_TIMEOUT_MS = 30_000;
+
+// generate() has no intermediate signal at all (no callback fires until
+// the whole call resolves), so this is a flat "took too long" timeout
+// rather than a reset-on-activity watchdog — deliberately more generous
+// than the load/stream watchdogs since a single long completion is a
+// legitimate case a per-token signal would otherwise distinguish from a
+// genuine hang.
+const GENERATE_TIMEOUT_MS = 90_000;
+
+// streamGenerate() DOES have a per-token signal, so — like the load
+// watchdog — this resets on every token rather than being a flat timeout.
+const STREAM_INACTIVITY_TIMEOUT_MS = 30_000;
 
 function reducer(state: ModelLoadState, action: Action): ModelLoadState {
   switch (action.type) {
@@ -136,9 +155,17 @@ export function useBrowserLLM(modelId: string | undefined): UseBrowserLLMResult 
   // Mirrors `state.status` into a ref so generate/streamGenerate/abort can
   // read the current status without needing `state.status` in their
   // useCallback deps — that would otherwise recreate them (and break
-  // reference equality for consumers) on every status transition.
+  // reference equality for consumers) on every status transition. Written
+  // from useLayoutEffect, not the render body directly — a render pass can
+  // be discarded/replayed under React 18 concurrent features, and a
+  // direct write there could stomp the ref with a status the committed
+  // tree never actually shows. useLayoutEffect (not useEffect) so the ref
+  // is updated synchronously after commit, before the browser paints or
+  // any subsequent effect in this commit could read a stale value.
   const statusRef = useRef(state.status);
-  statusRef.current = state.status;
+  useLayoutEffect(() => {
+    statusRef.current = state.status;
+  }, [state.status]);
 
   // Synchronous re-entrancy guard: React state updates are batched/async,
   // so `isGenerating` state alone can't prevent two generate() calls fired
@@ -218,6 +245,11 @@ export function useBrowserLLM(modelId: string | undefined): UseBrowserLLMResult 
       unsubscribeCrash = client.onCrash((error) => {
         if (!cancelled) {
           clearWatchdog();
+          // Align with the watchdog's terminate-and-null discipline above
+          // (a JS-error-event crash and a silent-hang timeout are both
+          // "this worker is dead now" — treat them the same way).
+          clientRef.current?.terminate();
+          clientRef.current = null;
           dispatch({ type: "error", error });
         }
       });
@@ -284,16 +316,103 @@ export function useBrowserLLM(modelId: string | undefined): UseBrowserLLMResult 
         throw new HookBusyError();
       }
 
+      // Captured by identity so the timeout below only acts if this is
+      // still the active client — otherwise a slow timeout firing after a
+      // newer load already replaced clientRef (e.g. the consumer changed
+      // modelId to recover) would wrongly terminate the NEW client and
+      // dispatch a stale error over the newer load's state.
+      const client = clientRef.current;
       isGeneratingRef.current = true;
       setIsGenerating(true);
       setGenerationError(null);
+
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      // Boxed in an object rather than a bare `let` — TypeScript's control
+      // flow analysis can incorrectly narrow a `let` reassigned inside a
+      // nested closure to `never` at later use sites; a mutable object
+      // property sidesteps that.
+      const crashSub: { unsubscribe: (() => void) | null } = {
+        unsubscribe: null,
+      };
+
       try {
-        return await clientRef.current.generate(messages);
+        return await new Promise<string>((resolve, reject) => {
+          // A crash/timeout here means "the worker is actually dead" — the
+          // load effect's own onCrash listener (subscribed for the whole
+          // effect lifetime, not just during a load) already dispatches
+          // {type:"error"} on the reducer for ANY crash, so `status`
+          // already transitions correctly regardless of whether a
+          // generate() call happens to be in flight. This local subscribe
+          // exists only so THIS call's promise settles immediately too,
+          // instead of hanging until the timeout below fires up to
+          // GENERATE_TIMEOUT_MS later.
+          crashSub.unsubscribe = client.onCrash((error) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            reject(error);
+          });
+
+          timeoutId = setTimeout(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            const error = new WorkerCrashError(
+              `no response for ${GENERATE_TIMEOUT_MS / 1000}s — the worker may have been killed by the browser (e.g. out of memory)`,
+            );
+            // Dispatch on the reducer HERE, not in the generic catch below
+            // — the catch must not branch on error type (a normal
+            // generation failure, e.g. a content-policy rejection from the
+            // engine, must NOT transition status away from "ready"; only
+            // this timeout and onCrash represent "the worker is actually
+            // dead" and should transition it). Captured-by-identity: only
+            // act if this is still the active client, so a newer load
+            // can't be stomped by a stale timeout.
+            if (clientRef.current === client) {
+              clientRef.current = null;
+              client.terminate();
+              dispatch({ type: "error", error });
+            }
+            reject(error);
+          }, GENERATE_TIMEOUT_MS);
+
+          // The "loser" of the race (client.generate() itself, once the
+          // timeout/crash above has already settled the promise) still
+          // needs a handler here — otherwise its eventual rejection (the
+          // dead client's call failing once terminated) would be
+          // unhandled. Checking `settled` first means we handle it
+          // without acting on it twice.
+          client.generate(messages).then(
+            (result) => {
+              if (!settled) {
+                settled = true;
+                resolve(result);
+              }
+            },
+            (err: unknown) => {
+              if (!settled) {
+                settled = true;
+                reject(err instanceof Error ? err : new Error(String(err)));
+              }
+            },
+          );
+        });
       } catch (err) {
+        // Deliberately does not branch on error type/instanceof — every
+        // generate() failure sets generationError, but only the timeout
+        // and onCrash paths above (or the load effect's own watchdog)
+        // transition the overall `status`. See the comments above.
         const error = err instanceof Error ? err : new Error(String(err));
         setGenerationError(error);
         throw error;
       } finally {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
+        crashSub.unsubscribe?.();
         isGeneratingRef.current = false;
         setIsGenerating(false);
       }
@@ -302,21 +421,30 @@ export function useBrowserLLM(modelId: string | undefined): UseBrowserLLMResult 
   );
 
   const streamGenerate = useCallback(
-    (
-      messages: ChatMessage[],
-    ): AsyncGenerator<string, void, void> =>
+    (messages: ChatMessage[]): AsyncGenerator<string, void, void> =>
       streamGenerateImpl(
         statusRef,
         clientRef,
         isGeneratingRef,
         setIsGenerating,
         setGenerationError,
+        dispatch,
         messages,
       ),
     [],
   );
 
   const abort = useCallback(() => {
+    // Deliberately does NOT also fire streamGenerate()'s internal
+    // AbortController here: with a live worker, client.abort() below
+    // (interruptGenerate()) ends the stream gracefully — no error, the
+    // `for await` loop just stops yielding. Forcing the controller
+    // unconditionally would turn every normal, healthy cancel into a
+    // thrown WorkerCrashError instead, regressing that existing contract.
+    // The one edge case this doesn't cover — the worker already silently
+    // dead at the exact moment abort() is called — is still bounded by
+    // streamGenerateImpl's own inactivity watchdog (fires within
+    // STREAM_INACTIVITY_TIMEOUT_MS regardless), not a permanent hang.
     clientRef.current?.abort().catch(() => {
       // Fire-and-forget: a rejection here means the underlying worker is
       // already gone (e.g. a modelId change terminated it), which is not
@@ -341,6 +469,7 @@ async function* streamGenerateImpl(
   isGeneratingRef: { current: boolean },
   setIsGenerating: (value: boolean) => void,
   setGenerationError: (value: Error | null) => void,
+  dispatch: (action: Action) => void,
   messages: ChatMessage[],
 ): AsyncGenerator<string, void, void> {
   if (statusRef.current !== "ready" || !clientRef.current) {
@@ -354,13 +483,70 @@ async function* streamGenerateImpl(
   isGeneratingRef.current = true;
   setIsGenerating(true);
   setGenerationError(null);
+
+  // Local to this call — not exposed to the outer hook's abort(), which
+  // deliberately relies on the existing graceful client.abort() path
+  // instead (see abort()'s comment). This controller exists purely so the
+  // watchdog below can unstick a suspended `for await` on a dead worker.
+  const controller = new AbortController();
+
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  const clearWatchdog = () => {
+    if (watchdog !== null) {
+      clearTimeout(watchdog);
+      watchdog = null;
+    }
+  };
+  const resetWatchdog = () => {
+    clearWatchdog();
+    watchdog = setTimeout(() => {
+      const error = new WorkerCrashError(
+        `no token for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s — the worker may have been killed by the browser (e.g. out of memory)`,
+      );
+      // Unconditional: this unsticks THIS call's suspended `for await`
+      // regardless of whether `client` is still the active one — if a
+      // newer load already replaced it (e.g. a modelId change terminated
+      // this client without an onCrash event, since terminate() fires no
+      // error), the local generator would otherwise hang forever and keep
+      // isGeneratingRef stuck true. Only the terminate/dispatch/clientRef
+      // side effects below are captured-by-identity, same reasoning as
+      // generate()'s timeout, so a newer load can't be stomped by a stale
+      // watchdog.
+      controller.abort(error);
+      if (clientRef.current === client) {
+        clientRef.current = null;
+        client.terminate();
+        dispatch({ type: "error", error });
+      }
+    }, STREAM_INACTIVITY_TIMEOUT_MS);
+  };
+
+  // Same reasoning as generate()'s onCrash subscription: the load effect's
+  // own onCrash listener already dispatches {type:"error"} on the reducer
+  // for any crash regardless of what's in flight, so this only needs to
+  // unstick THIS suspended `for await` immediately, rather than waiting
+  // up to STREAM_INACTIVITY_TIMEOUT_MS for the watchdog to notice.
+  const unsubscribeCrash = client.onCrash((error) => {
+    controller.abort(error);
+  });
+
   try {
-    yield* toAsyncGenerator((onToken) => client.streamGenerate(messages, onToken));
+    resetWatchdog();
+    const tokens = toAsyncGenerator(
+      (onToken) => client.streamGenerate(messages, onToken),
+      controller.signal,
+    );
+    for await (const token of tokens) {
+      resetWatchdog();
+      yield token;
+    }
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     setGenerationError(error);
     throw error;
   } finally {
+    clearWatchdog();
+    unsubscribeCrash();
     isGeneratingRef.current = false;
     setIsGenerating(false);
     // Always signal the worker to stop, whether we finished naturally or
@@ -368,8 +554,9 @@ async function* streamGenerateImpl(
     // on an already-finished generation is a harmless no-op, but skipping
     // this on early exit would leave the worker's inference loop (and GPU
     // compute) running unattended. A rejection here means the worker is
-    // already gone (e.g. a modelId change terminated it mid-stream), which
-    // isn't an error from the caller's perspective.
+    // already gone (e.g. a modelId change terminated it mid-stream, or the
+    // watchdog above already terminated it), which isn't an error from the
+    // caller's perspective.
     client.abort().catch(() => {});
   }
 }
