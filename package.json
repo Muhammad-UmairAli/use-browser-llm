@@ -2,6 +2,18 @@
   "name": "use-browser-llm",
   "version": "0.1.1",
   "description": "Headless React hook for running LLMs locally in the browser via WebGPU, with zero backend and complete privacy.",
+  "keywords": [
+    "react",
+    "react-hooks",
+    "llm",
+    "ai",
+    "webgpu",
+    "web-llm",
+    "browser",
+    "on-device-ai",
+    "privacy",
+    "offline"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
