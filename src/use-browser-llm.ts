@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { createEngineClient, type EngineClient } from "./engine-client.js";
 import { detectWebGPUSupport } from "./detect-webgpu.js";
 import { toAsyncGenerator } from "./to-async-generator.js";
@@ -148,9 +155,17 @@ export function useBrowserLLM(modelId: string | undefined): UseBrowserLLMResult 
   // Mirrors `state.status` into a ref so generate/streamGenerate/abort can
   // read the current status without needing `state.status` in their
   // useCallback deps — that would otherwise recreate them (and break
-  // reference equality for consumers) on every status transition.
+  // reference equality for consumers) on every status transition. Written
+  // from useLayoutEffect, not the render body directly — a render pass can
+  // be discarded/replayed under React 18 concurrent features, and a
+  // direct write there could stomp the ref with a status the committed
+  // tree never actually shows. useLayoutEffect (not useEffect) so the ref
+  // is updated synchronously after commit, before the browser paints or
+  // any subsequent effect in this commit could read a stale value.
   const statusRef = useRef(state.status);
-  statusRef.current = state.status;
+  useLayoutEffect(() => {
+    statusRef.current = state.status;
+  }, [state.status]);
 
   // Synchronous re-entrancy guard: React state updates are batched/async,
   // so `isGenerating` state alone can't prevent two generate() calls fired
