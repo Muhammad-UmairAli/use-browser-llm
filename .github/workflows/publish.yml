@@ -91,8 +91,14 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - name: Publish to GitHub Packages (scoped package name required)
+        # --registry is explicit here, not left to setup-node's scope+
+        # registry-url .npmrc mapping alone — that combination did not
+        # route npm publish to npm.pkg.github.com in practice (it fell
+        # back to the default registry.npmjs.org and failed with
+        # ENEEDAUTH), so the target registry is forced on the command
+        # itself as the reliable fix.
         run: |
           npm pkg set name="@${{ github.repository_owner }}/use-browser-llm"
-          npm publish --no-git-checks
+          npm publish --no-git-checks --registry=https://npm.pkg.github.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
