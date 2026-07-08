@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useLocalLLM } from "../src/use-local-llm.js";
+import { useBrowserLLM } from "../src/use-browser-llm.js";
 import type { EngineClient } from "../src/engine-client.js";
 import { UnsupportedError, WorkerCrashError } from "../src/errors.js";
 
@@ -46,9 +46,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("useLocalLLM", () => {
+describe("useBrowserLLM", () => {
   it("starts idle when no modelId is given", () => {
-    const { result } = renderHook(() => useLocalLLM(undefined));
+    const { result } = renderHook(() => useBrowserLLM(undefined));
 
     expect(result.current.status).toBe("idle");
     expect(result.current.progress).toBe(0);
@@ -74,7 +74,7 @@ describe("useLocalLLM", () => {
     });
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-    const { result } = renderHook(() => useLocalLLM("test-model"));
+    const { result } = renderHook(() => useBrowserLLM("test-model"));
 
     await waitFor(() => expect(result.current.status).toBe("loading"));
     expect(result.current.progress).toBe(0);
@@ -99,7 +99,7 @@ describe("useLocalLLM", () => {
     });
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-    const { result } = renderHook(() => useLocalLLM("test-model"));
+    const { result } = renderHook(() => useBrowserLLM("test-model"));
 
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current.error?.message).toBe("boom");
@@ -121,7 +121,7 @@ describe("useLocalLLM", () => {
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
     const { result, rerender } = renderHook(
-      ({ modelId }) => useLocalLLM(modelId),
+      ({ modelId }) => useBrowserLLM(modelId),
       { initialProps: { modelId: "model-a" } },
     );
     await waitFor(() => expect(result.current.status).toBe("error"));
@@ -149,7 +149,7 @@ describe("useLocalLLM", () => {
     });
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-    const { result, unmount } = renderHook(() => useLocalLLM("test-model"));
+    const { result, unmount } = renderHook(() => useBrowserLLM("test-model"));
     // Wait for the client to actually exist (past the async capability
     // check) before unmounting — otherwise there's nothing to terminate
     // yet, and this test would pass trivially for the wrong reason.
@@ -191,7 +191,7 @@ describe("useLocalLLM", () => {
       .mockReturnValueOnce(secondClient);
 
     const { result, rerender } = renderHook(
-      ({ modelId }) => useLocalLLM(modelId),
+      ({ modelId }) => useBrowserLLM(modelId),
       { initialProps: { modelId: "model-a" } },
     );
     await waitFor(() => expect(result.current.status).toBe("loading"));
@@ -213,7 +213,7 @@ describe("useLocalLLM", () => {
   async function renderReadyHook(overrides: Partial<EngineClient> = {}) {
     const fakeClient = makeFakeClient(overrides);
     engineClientModule.createEngineClient.mockReturnValue(fakeClient);
-    const rendered = renderHook(() => useLocalLLM("test-model"));
+    const rendered = renderHook(() => useBrowserLLM("test-model"));
     await waitFor(() => expect(rendered.result.current.status).toBe("ready"));
     return { ...rendered, fakeClient };
   }
@@ -243,7 +243,7 @@ describe("useLocalLLM", () => {
         loadModel: vi.fn(() => new Promise<void>(() => {})),
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
       await waitFor(() => expect(result.current.status).toBe("loading"));
 
       await expect(
@@ -355,7 +355,7 @@ describe("useLocalLLM", () => {
         loadModel: vi.fn(() => new Promise<void>(() => {})),
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
 
       const gen = result.current.streamGenerate([
         { role: "user", content: "hi" },
@@ -383,7 +383,7 @@ describe("useLocalLLM", () => {
         reason: "no-navigator-gpu",
       });
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
 
       await waitFor(() =>
         expect(result.current.status).toBe("unsupported"),
@@ -400,7 +400,7 @@ describe("useLocalLLM", () => {
       engineClientModule.createEngineClient.mockReturnValue(readyClient);
 
       const { result, rerender } = renderHook(
-        ({ modelId }) => useLocalLLM(modelId),
+        ({ modelId }) => useBrowserLLM(modelId),
         { initialProps: { modelId: "model-a" } },
       );
       await waitFor(() => expect(result.current.status).toBe("ready"));
@@ -436,7 +436,7 @@ describe("useLocalLLM", () => {
         .mockReturnValueOnce(recoveredClient);
 
       const { result, rerender } = renderHook(
-        ({ modelId }) => useLocalLLM(modelId),
+        ({ modelId }) => useBrowserLLM(modelId),
         { initialProps: { modelId: "model-a" } },
       );
       await waitFor(() => expect(result.current.status).toBe("loading"));
@@ -470,7 +470,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
 
       // Let the async capability-check microtask resolve under fake timers.
       await act(async () => {
@@ -497,7 +497,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -526,7 +526,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
 
       await waitFor(() => expect(result.current.cacheStatus).toBe("cached"));
       // Available before status reaches "ready" — this load never resolves.
@@ -540,7 +540,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
 
       await waitFor(() =>
         expect(result.current.cacheStatus).toBe("downloading"),
@@ -555,7 +555,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
 
       await waitFor(() => expect(result.current.status).toBe("loading"));
       expect(result.current.cacheStatus).toBe("checking");
@@ -576,7 +576,7 @@ describe("useLocalLLM", () => {
       });
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
-      const { result } = renderHook(() => useLocalLLM("test-model"));
+      const { result } = renderHook(() => useBrowserLLM("test-model"));
       await waitFor(() => expect(result.current.status).toBe("ready"));
       expect(result.current.cacheStatus).toBe("checking");
 
@@ -597,9 +597,9 @@ describe("useLocalLLM", () => {
       engineClientModule.createEngineClient.mockReturnValue(fakeClient);
 
       const { result, rerender } = renderHook<
-        ReturnType<typeof useLocalLLM>,
+        ReturnType<typeof useBrowserLLM>,
         { modelId: string | undefined }
-      >(({ modelId }) => useLocalLLM(modelId), {
+      >(({ modelId }) => useBrowserLLM(modelId), {
         initialProps: { modelId: "test-model" },
       });
       await waitFor(() => expect(result.current.status).toBe("ready"));

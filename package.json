@@ -1,15 +1,15 @@
 {
-  "name": "use-local-llm",
+  "name": "use-browser-llm",
   "version": "0.1.0",
   "description": "Headless React hook for running LLMs locally in the browser via WebGPU, with zero backend and complete privacy.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-UmairAli/use-local-llm.git"
+    "url": "git+https://github.com/Muhammad-UmairAli/use-browser-llm.git"
   },
-  "homepage": "https://github.com/Muhammad-UmairAli/use-local-llm#readme",
+  "homepage": "https://github.com/Muhammad-UmairAli/use-browser-llm#readme",
   "bugs": {
-    "url": "https://github.com/Muhammad-UmairAli/use-local-llm/issues"
+    "url": "https://github.com/Muhammad-UmairAli/use-browser-llm/issues"
   },
   "type": "module",
   "sideEffects": false,

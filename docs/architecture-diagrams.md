@@ -28,7 +28,7 @@ flowchart LR
 
 <!-- Add and update component diagrams below as the system grows -->
 
-## use-local-llm: Worker + Comlink RPC boundary
+## use-browser-llm: Worker + Comlink RPC boundary
 
 Introduced in P1-03. The only place the raw `@mlc-ai/web-llm` engine is
 touched is inside the Worker; the main thread only ever talks to it through
@@ -39,7 +39,7 @@ lib-specific globals (DOM vs WebWorker).
 ```mermaid
 flowchart LR
     subgraph MainThread["Main thread [built]"]
-        hook["useLocalLLM() hook\n(load state, generate/streamGenerate,\nunsupported+crash+watchdog, cacheStatus\n— P1-04/05/06/07) [built]"]
+        hook["useBrowserLLM() hook\n(load state, generate/streamGenerate,\nunsupported+crash+watchdog, cacheStatus\n— P1-04/05/06/07) [built]"]
         client["engine-client.ts\ncreateEngineClient() [built]"]
         hook --> client
     end
@@ -57,6 +57,7 @@ Notes:
 
 - `EngineAPI` is exposed via `Comlink.expose()` in `worker.ts`, never web-llm's own `WebWorkerMLCEngine`/`Handler` — see `.claude/epics/use-local-llm/epic.md`'s Scope Deltas for why both would have been redundant.
 - Callback arguments (`onProgress`, `onToken`) cross the boundary via `Comlink.proxy()`, not plain function references — Comlink does not auto-proxy functions.
-- `useLocalLLM()` now covers model-loading state (idle/loading/ready/error/unsupported), generate/streamGenerate/abort, WebGPU capability detection (short-circuits to `unsupported` before ever creating a worker), worker-crash/inactivity-watchdog error handling, and cache-status exposure (`cacheStatus`, via `EngineAPI.checkCache()` → web-llm's own `hasModelInCache()`, only ever called from inside the worker to keep web-llm's runtime out of the main bundle). Remaining Phase 1 work (tests, docs, publish polish) doesn't add hook behavior, just hardens/documents what's here.
+- `useBrowserLLM()` now covers model-loading state (idle/loading/ready/error/unsupported), generate/streamGenerate/abort, WebGPU capability detection (short-circuits to `unsupported` before ever creating a worker), worker-crash/inactivity-watchdog error handling, and cache-status exposure (`cacheStatus`, via `EngineAPI.checkCache()` → web-llm's own `hasModelInCache()`, only ever called from inside the worker to keep web-llm's runtime out of the main bundle). Remaining Phase 1 work (tests, docs, publish polish) doesn't add hook behavior, just hardens/documents what's here.
 - Crash/watchdog detection (P1-07) is scoped to the loading phase only — a worker crash during `generate()`/`streamGenerate()` is not yet covered; see `epic.md`'s Scope Deltas.
 - **Phase 1 complete (P1-10):** the public API is now polish-frozen — `generate()`/`streamGenerate()` take a self-contained `ChatMessage` type (`src/types.ts`), not a re-export of web-llm's own message type, so `dist/index.d.ts` has zero imports from `@mlc-ai/web-llm` or `comlink`. `npm pack` ships exactly `dist/`, `README.md`, `LICENSE`, `package.json` (no sourcemaps — they embedded full original source, contradicting "no source shipped"). CI now asserts the worker chunk never leaks into `dist/index.js` on every PR (`grep MLCEngine`), on top of the manual real-Vite-consumer-project verification done for this task. `.github/workflows/publish.yml` is gated on a `v*` tag push only.
+- **Post-close rename:** the npm name `use-local-llm` turned out to already be taken by an unrelated package (a different, server-based local-LLM hook). Renamed the package, the exported hook (`useLocalLLM` → `useBrowserLLM`), the GitHub repo, and this diagram's naming to `use-browser-llm` before the first real publish. The `.claude/epics/use-local-llm/` CCPM directory name and PRD/epic frontmatter `name:` field were deliberately left as `use-local-llm` — that's the internal Phase 1 planning identifier, decoupled from the published package name, and renaming closed historical docs would be revisionist for no functional benefit.

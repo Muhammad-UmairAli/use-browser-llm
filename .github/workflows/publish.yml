@@ -4,7 +4,7 @@ name: Publish
 # Cut a release by tagging a commit on main (e.g. after merging a
 # release/* branch under Git Flow) with `git tag vX.Y.Z && git push origin
 # vX.Y.Z`. Requires an NPM_TOKEN repo secret with publish rights for
-# use-local-llm before this can actually publish — add it in
+# use-browser-llm before this can actually publish — add it in
 # Settings > Secrets and variables > Actions before the first release.
 
 on:

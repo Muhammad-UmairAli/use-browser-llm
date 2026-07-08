@@ -126,3 +126,12 @@ examples and real model generation (documented as a known gap in P1-09
 and P1-08's Scope Deltas — this environment has no WebGPU-capable
 browser to download and run a real model end-to-end). No Phase 2 has been
 opened yet.
+
+**Addendum (2026-07-08, post-close):** while proceeding to publish, found
+the reserved npm name `use-local-llm` was already taken by an unrelated
+package. Renamed the package, exported hook, GitHub repo, and all
+user-facing docs to `use-browser-llm`/`useBrowserLLM` — see
+`.claude/epics/use-local-llm/epic.md`'s Scope Deltas for the full record.
+The figures and file paths above are left as originally written (accurate
+to what Phase 1 actually shipped under at the time); they are not
+retroactively renamed.

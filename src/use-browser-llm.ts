@@ -114,7 +114,7 @@ export interface GenerationState {
   generationError: Error | null;
 }
 
-export interface UseLocalLLMResult extends ModelLoadState, GenerationState {
+export interface UseBrowserLLMResult extends ModelLoadState, GenerationState {
   generate(messages: ChatMessage[]): Promise<string>;
   streamGenerate(
     messages: ChatMessage[],
@@ -129,7 +129,7 @@ export interface UseLocalLLMResult extends ModelLoadState, GenerationState {
  * (P1-05). Cache-status (P1-06) and the unsupported-browser path (P1-07)
  * extend this hook in later tasks.
  */
-export function useLocalLLM(modelId: string | undefined): UseLocalLLMResult {
+export function useBrowserLLM(modelId: string | undefined): UseBrowserLLMResult {
   const [state, dispatch] = useReducer(reducer, initialState);
   const clientRef = useRef<EngineClient | null>(null);
 

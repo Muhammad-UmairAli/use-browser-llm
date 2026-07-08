@@ -1,4 +1,4 @@
-# use-local-llm
+# use-browser-llm
 
 A headless React hook for running Large Language Models locally in the
 browser via WebGPU — no backend, no API keys, no data leaving the device.
@@ -13,7 +13,7 @@ re-download.
 deliberately headless so it stays lightweight and works with whatever
 design system you already use (Tailwind, Shadcn, CSS Modules, plain CSS,
 anything). You bring the chat bubble, the loading spinner, the button —
-`useLocalLLM()` only gives you the state and the functions to drive them.
+`useBrowserLLM()` only gives you the state and the functions to drive them.
 
 ## Requirements
 
@@ -26,19 +26,19 @@ anything). You bring the chat bubble, the loading spinner, the button —
 ## Install
 
 ```sh
-npm install use-local-llm
+npm install use-browser-llm
 ```
 
 ## Quickstart
 
 ```tsx
 import { useState } from "react";
-import { useLocalLLM } from "use-local-llm";
+import { useBrowserLLM } from "use-browser-llm";
 
 const MODEL_ID = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 
 export function App() {
-  const { status, progress, generate, isGenerating } = useLocalLLM(MODEL_ID);
+  const { status, progress, generate, isGenerating } = useBrowserLLM(MODEL_ID);
   const [reply, setReply] = useState("");
 
   if (status === "loading") {
@@ -68,7 +68,7 @@ export function App() {
 }
 ```
 
-`useLocalLLM` takes a model id — any id from
+`useBrowserLLM` takes a model id — any id from
 [`prebuiltAppConfig.model_list`](https://github.com/mlc-ai/web-llm/blob/main/src/config.ts)
 in `@mlc-ai/web-llm` — or `undefined` if you don't want to load a model yet
 (e.g. while the user is still picking one). `status` starts at `"idle"`,
@@ -83,10 +83,10 @@ It returns an `AsyncGenerator`, so you consume it with `for await`:
 
 ```tsx
 import { useState } from "react";
-import { useLocalLLM } from "use-local-llm";
+import { useBrowserLLM } from "use-browser-llm";
 
 export function StreamingExample() {
-  const { status, streamGenerate } = useLocalLLM(
+  const { status, streamGenerate } = useBrowserLLM(
     "Llama-3.2-1B-Instruct-q4f16_1-MLC",
   );
   const [text, setText] = useState("");
@@ -123,10 +123,10 @@ stops generation in the worker itself, not just the promise on the main
 thread:
 
 ```tsx
-import { useLocalLLM } from "use-local-llm";
+import { useBrowserLLM } from "use-browser-llm";
 
 export function CancellableExample() {
-  const { status, streamGenerate, abort, isGenerating } = useLocalLLM(
+  const { status, streamGenerate, abort, isGenerating } = useBrowserLLM(
     "Llama-3.2-1B-Instruct-q4f16_1-MLC",
   );
 
@@ -165,10 +165,10 @@ ever created. Check for it and render your own fallback UI (this package
 ships none):
 
 ```tsx
-import { useLocalLLM } from "use-local-llm";
+import { useBrowserLLM } from "use-browser-llm";
 
 export function UnsupportedFallbackExample() {
-  const { status } = useLocalLLM("Llama-3.2-1B-Instruct-q4f16_1-MLC");
+  const { status } = useBrowserLLM("Llama-3.2-1B-Instruct-q4f16_1-MLC");
 
   if (status === "unsupported") {
     return (
@@ -191,7 +191,7 @@ previous session, so you can show a different message for "instant load"
 vs. "first-time multi-gigabyte download":
 
 ```tsx
-const { cacheStatus } = useLocalLLM("Llama-3.2-1B-Instruct-q4f16_1-MLC");
+const { cacheStatus } = useBrowserLLM("Llama-3.2-1B-Instruct-q4f16_1-MLC");
 // "idle" | "checking" | "cached" | "downloading"
 ```
 
@@ -215,12 +215,12 @@ anything load-gating; `cacheStatus` is informational.
   cause was the worker crashing or becoming unresponsive, rather than a
   normal model-load failure.
 
-All are exported from `use-local-llm` for `instanceof` checks.
+All are exported from `use-browser-llm` for `instanceof` checks.
 
 ## API reference
 
 ```ts
-function useLocalLLM(modelId: string | undefined): {
+function useBrowserLLM(modelId: string | undefined): {
   status: "idle" | "loading" | "ready" | "error" | "unsupported";
   progress: number; // 0-1, meaningful only while status === "loading"
   error: Error | null; // set for "error" and "unsupported"
