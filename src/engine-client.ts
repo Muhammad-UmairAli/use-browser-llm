@@ -29,7 +29,7 @@ export interface EngineClient {
    * OOM-kill, where the worker just stops responding with no event at
    * all. That case has no event to subscribe to; callers needing to
    * detect it must use an inactivity timeout on their own pending calls
-   * instead (see use-local-llm.ts's load-inactivity watchdog).
+   * instead (see use-browser-llm.ts's load-inactivity watchdog).
    */
   onCrash(listener: (error: WorkerCrashError) => void): () => void;
 }
